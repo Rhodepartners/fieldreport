@@ -59,6 +59,24 @@ const blankReport = (pre={}) => ({
 const blankIssue = () => ({ id:Date.now()+Math.random(), loc:"", desc:"", photos:[], type:"General Observation" });
 const blankPhoto = src => ({ id:Date.now()+Math.random(), src, caption:"", ts:Date.now() });
 
+/* Compress image to max 1400px on longest side, JPEG 0.75 quality */
+const compressImage = (src, cb) => {
+  const img = new Image();
+  img.onload = () => {
+    const MAX = 1400;
+    let w = img.naturalWidth, h = img.naturalHeight;
+    if (w > MAX || h > MAX) {
+      const r = Math.min(MAX/w, MAX/h);
+      w = Math.round(w*r); h = Math.round(h*r);
+    }
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    c.getContext("2d").drawImage(img, 0, 0, w, h);
+    cb(c.toDataURL("image/jpeg", 0.75));
+  };
+  img.src = src;
+};
+
 /* ── Auto-resize textarea ──────────────────────────────────────────── */
 function AutoTA({ value, onChange, placeholder, style, className }) {
   const ref = useRef();
@@ -200,7 +218,7 @@ function IssueCard({ issue, displayNum, flatIdx, total, locs, onUpdate, onDelete
 
   const commit=u=>{const nf={...f,...u};setF(nf);onUpdate(issue.id,nf,undefined);};
   const addPhotos=files=>Array.from(files).filter(f=>f.type.startsWith("image/")).forEach(file=>{
-    const r=new FileReader();r.onload=ev=>onUpdate(issue.id,undefined,[...issue.photos,blankPhoto(ev.target.result)]);r.readAsDataURL(file);});
+    const r=new FileReader();r.onload=ev=>compressImage(ev.target.result,compressed=>onUpdate(issue.id,undefined,[...issue.photos,blankPhoto(compressed)]));r.readAsDataURL(file);});
   const remPhoto=pid=>onUpdate(issue.id,undefined,issue.photos.filter(p=>p.id!==pid));
   const capPhoto=(pid,cap)=>onUpdate(issue.id,undefined,issue.photos.map(p=>p.id===pid?{...p,caption:cap}:p));
 
@@ -416,13 +434,13 @@ function App() {
       if(view!=="report")return;
       for(let it of(e.clipboardData?.items||[])){
         if(it.type.startsWith("image/")){
-          const r=new FileReader();r.onload=ev=>{
+          const r=new FileReader();r.onload=ev=>compressImage(ev.target.result,compressed=>{
             setReport(p=>{
-              if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(ev.target.result)]}]};}
+              if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(compressed)]}]};}
               const last=p.issues[p.issues.length-1];
-              return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...i.photos,blankPhoto(ev.target.result)]}:i)};
+              return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...i.photos,blankPhoto(compressed)]}:i)};
             });toast$("Photo pasted ✓");
-          };r.readAsDataURL(it.getAsFile());
+          });r.readAsDataURL(it.getAsFile());
         }
       }
     };
@@ -431,13 +449,13 @@ function App() {
 
   const handleDrop=files=>{
     Array.from(files).filter(f=>f.type.startsWith("image/")).forEach(file=>{
-      const r=new FileReader();r.onload=ev=>{
+      const r=new FileReader();r.onload=ev=>compressImage(ev.target.result,compressed=>{
         setReport(p=>{
-          if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(ev.target.result)]}]};}
+          if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(compressed)]}]};}
           const last=p.issues[p.issues.length-1];
-          return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...i.photos,blankPhoto(ev.target.result)]}:i)};
+          return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...i.photos,blankPhoto(compressed)]}:i)};
         });
-      };r.readAsDataURL(file);
+      });r.readAsDataURL(file);
     });toast$("Photo(s) added ✓");
   };
 
