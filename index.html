@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site Observation Report Builder</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  * { font-family: Arial, Helvetica, sans-serif !important; }
+  body { margin:0; background:#f8fafc; }
+  .print-show { display:none; }
+  .print-only { display:none; }
+  @media print {
+    * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; font-family:Arial,Helvetica,sans-serif !important; }
+    .no-print { display:none !important; }
+    .print-show { display:block !important; }
+    .print-only { display:inline !important; }
+    body { background:white; }
+    .print-card { break-inside:avoid; page-break-inside:avoid; }
+    .flagged-card { background:#fce4f0 !important; }
+    .flagged-hd   { background:#f8c8e0 !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const LS = {
+  get: k     => { try { const v=localStorage.getItem(k); return v?{value:v}:null; } catch { return null; } },
+  set: (k,v) => { try { localStorage.setItem(k,v); } catch {} },
+  del: k     => { try { localStorage.removeItem(k); } catch {} }
+};
+
+const DISCLAIMER   = "This report is considered to be a factual representation of site observation/meeting field notes. Attendees and recipients are requested to advise the undersigned of any corrections or questions within five business days following receipt, otherwise it will be understood the report is accepted as written.";
+const ISSUE_TYPES  = ["General Observation","Defect Noted","Issue Noted"];
+const DEFAULT_LOCS = ["Basement / B1","Level 1","Level 2","Level 3","Roof","Exterior","Site"];
+
+const today    = () => new Date().toISOString().split("T")[0];
+const fmtd     = d  => d ? new Date(d+"T12:00:00").toLocaleDateString([],{month:"long",day:"numeric",year:"numeric"}) : "—";
+const fmtShort = ts => new Date(ts).toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
+const isFlagged= t  => t==="Defect Noted"||t==="Issue Noted";
+
+const blankReport = (pre={}) => ({
+  id:Date.now().toString(), reportNo:pre.reportNo!=null?pre.reportNo+1:1,
+  project:pre.project||"", projectNo:pre.projectNo||"", address:pre.address||"",
+  owner:pre.owner||"", ownerAddr:pre.ownerAddr||"",
+  architect:pre.architect||"", architectAddr:pre.architectAddr||"",
+  contractor:pre.contractor||"", contractorAddr:pre.contractorAddr||"",
+  issued:today(), visited:today(), distribution:pre.distribution||"",
+  issues:[], logo:pre.logo||"",
+  locs:pre.locs?[...pre.locs]:[...DEFAULT_LOCS],
+  created:Date.now(), updated:Date.now()
+});
+const blankIssue = () => ({ id:Date.now()+Math.random(), loc:"", desc:"", photos:[], type:"General Observation" });
+const blankPhoto = src => ({ id:Date.now()+Math.random(), src, caption:"", ts:Date.now() });
+
+/* ── Auto-resize textarea ──────────────────────────────────────────── */
+function AutoTA({ value, onChange, placeholder, style, className }) {
+  const ref = useRef();
+  useEffect(()=>{
+    if(!ref.current) return;
+    ref.current.style.height="auto";
+    ref.current.style.height=ref.current.scrollHeight+"px";
+  },[value]);
+  return <textarea ref={ref} value={value} onChange={onChange} placeholder={placeholder}
+    className={className} style={{...style, resize:"none", overflow:"hidden"}} />;
+}
+
+/* ── Annotation Modal ──────────────────────────────────────────────── */
+function AnnotationModal({ photo, onSave, onClose }) {
+  const cvs=useRef(),drw=useRef(false),s0=useRef({});
+  const [tool,setTool]=useState("pen"),[color,setColor]=useState("#ef4444"),[sz,setSz]=useState(4),[hist,setHist]=useState([]);
+  useEffect(()=>{
+    const c=cvs.current,ctx=c.getContext("2d"),img=new Image();
+    img.onload=()=>{const mw=Math.min(740,window.innerWidth-48),mh=window.innerHeight*0.54,r=Math.min(mw/img.naturalWidth,mh/img.naturalHeight);c.width=img.naturalWidth*r;c.height=img.naturalHeight*r;ctx.drawImage(img,0,0,c.width,c.height);setHist([c.toDataURL()]);};
+    img.src=photo.src;
+  },[photo.src]);
+  const gp=(e,c)=>{const rc=c.getBoundingClientRect(),cx=e.touches?e.touches[0].clientX:e.clientX,cy=e.touches?e.touches[0].clientY:e.clientY;return{x:(cx-rc.left)*(c.width/rc.width),y:(cy-rc.top)*(c.height/rc.height)};};
+  const ds=(ctx,s,e)=>{ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=sz;ctx.lineCap="round";ctx.lineJoin="round";
+    if(tool==="arrow"){const dx=e.x-s.x,dy=e.y-s.y,ang=Math.atan2(dy,dx),hl=14+sz*2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();ctx.beginPath();ctx.moveTo(e.x,e.y);ctx.lineTo(e.x-hl*Math.cos(ang-Math.PI/6),e.y-hl*Math.sin(ang-Math.PI/6));ctx.lineTo(e.x-hl*Math.cos(ang+Math.PI/6),e.y-hl*Math.sin(ang+Math.PI/6));ctx.closePath();ctx.fill();}
+    else if(tool==="rect"){ctx.strokeRect(s.x,s.y,e.x-s.x,e.y-s.y);}
+    else if(tool==="circle"){const rx=(e.x-s.x)/2,ry=(e.y-s.y)/2;ctx.beginPath();ctx.ellipse(s.x+rx,s.y+ry,Math.abs(rx),Math.abs(ry),0,0,Math.PI*2);ctx.stroke();}};
+  const onDown=e=>{e.preventDefault();const c=cvs.current,ctx=c.getContext("2d");drw.current=true;s0.current=gp(e,c);if(tool==="pen"){ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=sz;ctx.lineCap="round";ctx.moveTo(s0.current.x,s0.current.y);}};
+  const onMove=e=>{e.preventDefault();if(!drw.current)return;const c=cvs.current,ctx=c.getContext("2d"),p=gp(e,c);if(tool==="pen"){ctx.lineTo(p.x,p.y);ctx.stroke();}else if(tool!=="text"){const img=new Image();img.onload=()=>{ctx.drawImage(img,0,0);ds(ctx,s0.current,p);};img.src=hist[hist.length-1];}};
+  const onUp=e=>{e.preventDefault();if(!drw.current)return;drw.current=false;const c=cvs.current,ctx=c.getContext("2d"),p=gp(e,c);if(tool!=="pen"&&tool!=="text")ds(ctx,s0.current,p);setHist(h=>[...h,c.toDataURL()]);};
+  const addText=()=>{const t=prompt("Enter annotation text:");if(!t)return;const c=cvs.current,ctx=c.getContext("2d");ctx.font=`bold ${12+sz*2}px Arial`;ctx.fillStyle=color;ctx.strokeStyle="rgba(0,0,0,0.5)";ctx.lineWidth=3;const mx=ctx.measureText(t).width;ctx.strokeText(t,c.width/2-mx/2,c.height/2);ctx.fillText(t,c.width/2-mx/2,c.height/2);setHist(h=>[...h,c.toDataURL()]);};
+  const undo=()=>{if(hist.length<=1)return;const nh=hist.slice(0,-1);setHist(nh);const c=cvs.current,ctx=c.getContext("2d"),img=new Image();img.onload=()=>{ctx.clearRect(0,0,c.width,c.height);ctx.drawImage(img,0,0);};img.src=nh[nh.length-1];};
+  const TOOLS=[{id:"pen",lbl:"✏️"},{id:"arrow",lbl:"→"},{id:"circle",lbl:"○"},{id:"rect",lbl:"□"},{id:"text",lbl:"T"}];
+  const COLORS=["#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#a855f7","#ffffff","#111827"];
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-80 flex flex-col items-center justify-center p-3" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="bg-white rounded-2xl overflow-hidden shadow-2xl w-full max-w-3xl flex flex-col" style={{maxHeight:"96vh"}}>
+        <div className="bg-gray-900 text-white px-4 py-3 flex items-center justify-between">
+          <span className="font-bold text-sm">✏️ Annotate Photo</span>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl px-1">✕</button>
+        </div>
+        <div className="bg-gray-800 px-3 py-2 flex flex-wrap items-center gap-2">
+          <div className="flex gap-1">{TOOLS.map(t=><button key={t.id} onClick={t.id==="text"?addText:()=>setTool(t.id)} className={`w-9 h-9 rounded-lg text-sm font-bold ${tool===t.id&&t.id!=="text"?"bg-blue-500 text-white":"bg-gray-700 text-gray-200 hover:bg-gray-600"}`}>{t.lbl}</button>)}</div>
+          <div className="flex gap-1 flex-wrap">{COLORS.map(c=><button key={c} onClick={()=>setColor(c)} className={`w-6 h-6 rounded-full border-2 transition-all ${color===c?"border-white scale-110":"border-transparent"}`} style={{background:c}}/>)}</div>
+          <div className="flex items-center gap-2 ml-auto">
+            <input type="range" min="1" max="14" value={sz} onChange={e=>setSz(+e.target.value)} className="w-16"/>
+            <button onClick={undo} disabled={hist.length<=1} className="bg-gray-700 hover:bg-gray-600 disabled:opacity-30 text-white text-xs px-3 py-1.5 rounded-lg">↩ Undo</button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto bg-gray-100 flex items-center justify-center p-4 min-h-0">
+          <canvas ref={cvs} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp} className="max-w-full rounded shadow-lg cursor-crosshair touch-none"/>
+        </div>
+        <div className="bg-white px-4 py-3 flex justify-end gap-3 border-t border-gray-100">
+          <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-medium hover:bg-gray-50">Discard</button>
+          <button onClick={()=>onSave(cvs.current.toDataURL("image/jpeg",0.92))} className="px-5 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Save Annotation</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Location Manager ──────────────────────────────────────────────── */
+function LocManager({ locs, onChange, onClose }) {
+  const [list,setList]=useState([...locs]),[inp,setInp]=useState("");
+  const add=()=>{const v=inp.trim();if(v&&!list.includes(v)){setList([...list,v]);setInp("");}};
+  const mv=(i,d)=>{const a=[...list];[a[i],a[i+d]]=[a[i+d],a[i]];setList(a);};
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-gray-900">Floor / Location Tags</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Customize for this project — e.g. "Level 3 – Unit 301"</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl px-1">✕</button>
+        </div>
+        <div className="p-4 space-y-1.5 overflow-y-auto" style={{maxHeight:"16rem"}}>
+          {list.map((l,i)=>(
+            <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
+              <span className="flex-1 text-sm text-gray-800">{l}</span>
+              <button onClick={()=>mv(i,-1)} disabled={i===0} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 w-7 h-7 flex items-center justify-center">↑</button>
+              <button onClick={()=>mv(i,1)} disabled={i===list.length-1} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 w-7 h-7 flex items-center justify-center">↓</button>
+              <button onClick={()=>setList(list.filter((_,j)=>j!==i))} className="text-red-400 hover:text-red-600 w-7 h-7 flex items-center justify-center text-xs">✕</button>
+            </div>
+          ))}
+        </div>
+        <div className="px-4 pb-3 flex gap-2">
+          <input className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+            value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="e.g. Level 4 – Mechanical"/>
+          <button onClick={add} className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold">Add</button>
+        </div>
+        <div className="px-4 py-3 border-t border-gray-100 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl border border-gray-200 text-sm hover:bg-gray-50">Cancel</button>
+          <button onClick={()=>{onChange(list);onClose();}} className="px-5 py-2 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Auto-fill Modal ───────────────────────────────────────────────── */
+function AutoFillModal({ index, onSelect, onSkip }) {
+  const sorted=[...index].sort((a,b)=>b.updated-a.updated);
+  const [sel,setSel]=useState(sorted[0]?.id||"");
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="px-5 py-5 border-b border-gray-100">
+          <h3 className="font-bold text-gray-900 text-base">Auto-fill from an existing project?</h3>
+          <p className="text-sm text-gray-500 mt-1">Copies project name, number, address, team contacts, distribution list, logo, and location tags. Report number increments automatically.</p>
+        </div>
+        <div className="p-5">
+          <select className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+            value={sel} onChange={e=>setSel(e.target.value)}>
+            {sorted.map(r=><option key={r.id} value={r.id}>{r.project||"Untitled"} — Report #{r.reportNo} ({r.address||"No address"})</option>)}
+          </select>
+        </div>
+        <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
+          <button onClick={onSkip} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium hover:bg-gray-50">Start Fresh</button>
+          <button onClick={()=>onSelect(sel)} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Auto-fill ✓</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Type badge ────────────────────────────────────────────────────── */
+function TypeBadge({ type }) {
+  const f=isFlagged(type);
+  return <span style={{fontSize:"0.68rem",fontWeight:700,padding:"0.15rem 0.55rem",background:f?"#fce4f0":"#f3f4f6",color:f?"#9d174d":"#374151",border:`1px solid ${f?"#f0a8cc":"#d1d5db"}`}}>{f?"⚠ ":""}{type}</span>;
+}
+
+/* ── Issue Card ────────────────────────────────────────────────────── */
+function IssueCard({ issue, displayNum, flatIdx, total, locs, onUpdate, onDelete, onMoveUp, onMoveDown, onAnnotate }) {
+  const [f,setF]=useState({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"});
+  const fileRef=useRef();
+  const flagged=isFlagged(f.type);
+
+  useEffect(()=>{ setF({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"}); },[issue.loc,issue.desc,issue.type]);
+
+  const commit=u=>{const nf={...f,...u};setF(nf);onUpdate(issue.id,nf,undefined);};
+  const addPhotos=files=>Array.from(files).filter(f=>f.type.startsWith("image/")).forEach(file=>{
+    const r=new FileReader();r.onload=ev=>onUpdate(issue.id,undefined,[...issue.photos,blankPhoto(ev.target.result)]);r.readAsDataURL(file);});
+  const remPhoto=pid=>onUpdate(issue.id,undefined,issue.photos.filter(p=>p.id!==pid));
+  const capPhoto=(pid,cap)=>onUpdate(issue.id,undefined,issue.photos.map(p=>p.id===pid?{...p,caption:cap}:p));
+
+  const border    = flagged?"1px solid #f0a8cc":"1px solid #d1d5db";
+  const hdBg      = flagged?"#f8c8e0":"#f3f4f6";
+  const bodyBg    = flagged?"#fce4f0":"#ffffff";
+  const descBg    = flagged?"#fdf0f7":"#fafafa";
+
+  return (
+    <div className={`print-card ${flagged?"flagged-card":""}`} style={{border,borderRadius:0,overflow:"hidden",background:bodyBg,marginBottom:"0.4rem"}}>
+      <div className={flagged?"flagged-hd":""} style={{background:hdBg,borderBottom:border,padding:"0.4rem 0.85rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
+        <span style={{fontSize:"0.78rem",fontWeight:700,color:"#374151",flexShrink:0,minWidth:"2.5rem"}}>{displayNum}</span>
+        <select value={f.loc} onChange={e=>commit({loc:e.target.value})} className="no-print"
+          style={{flex:1,maxWidth:"22rem",border:"1px solid #d1d5db",borderRadius:"0.2rem",padding:"0.2rem 0.45rem",fontSize:"0.78rem",background:"white",color:"#374151"}}>
+          <option value="">— Select Location —</option>
+          {locs.map(l=><option key={l}>{l}</option>)}
+        </select>
+        <div className="no-print" style={{display:"flex",gap:"0",marginLeft:"auto",flexShrink:0}}>
+          <button onClick={()=>onMoveUp(issue.id)} disabled={flatIdx===0} style={{width:"1.7rem",height:"1.7rem",border:"none",background:"transparent",cursor:"pointer",color:"#9ca3af",fontSize:"0.8rem",opacity:flatIdx===0?0.25:1}}>↑</button>
+          <button onClick={()=>onMoveDown(issue.id)} disabled={flatIdx===total-1} style={{width:"1.7rem",height:"1.7rem",border:"none",background:"transparent",cursor:"pointer",color:"#9ca3af",fontSize:"0.8rem",opacity:flatIdx===total-1?0.25:1}}>↓</button>
+          <button onClick={()=>onDelete(issue.id)} style={{width:"1.7rem",height:"1.7rem",border:"none",background:"transparent",cursor:"pointer",color:"#f87171",fontSize:"0.8rem",marginLeft:"0.2rem"}}>✕</button>
+        </div>
+      </div>
+      <div style={{padding:"0.65rem 0.85rem",background:bodyBg}}>
+        <div className="no-print" style={{display:"flex",alignItems:"center",gap:"1rem",marginBottom:"0.55rem",flexWrap:"wrap"}}>
+          <span style={{fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:"#9ca3af",flexShrink:0}}>Type</span>
+          {ISSUE_TYPES.map(t=>(
+            <label key={t} style={{display:"flex",alignItems:"center",gap:"0.3rem",cursor:"pointer"}}>
+              <input type="radio" name={`type-${issue.id}`} value={t} checked={f.type===t} onChange={()=>commit({type:t})}
+                style={{accentColor:isFlagged(t)?"#be185d":"#374151",width:"0.82rem",height:"0.82rem"}}/>
+              <span style={{fontSize:"0.8rem",color:isFlagged(t)?"#9d174d":"#374151",fontWeight:f.type===t?600:400}}>{t}</span>
+            </label>
+          ))}
+        </div>
+        <div className="print-show" style={{marginBottom:"0.3rem"}}><TypeBadge type={f.type}/></div>
+        <AutoTA value={f.desc} onChange={e=>commit({desc:e.target.value})} className="no-print"
+          placeholder="Describe the condition, defect, or observation. Include materials involved, extent, measurements, and any recommended action or follow-up required."
+          style={{width:"100%",border:"1px solid #d1d5db",padding:"0.4rem 0.6rem",fontSize:"0.82rem",color:"#374151",lineHeight:1.6,background:descBg,boxSizing:"border-box",minHeight:"3rem"}}/>
+        <div className="print-show" style={{fontSize:"0.8rem",color:"#1f2937",lineHeight:1.65,whiteSpace:"pre-wrap"}}>
+          {f.desc||<span style={{color:"#9ca3af",fontStyle:"italic"}}>No description.</span>}
+        </div>
+        {issue.photos.length>0&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginTop:"0.65rem"}}>
+            {issue.photos.map((ph,pi)=>(
+              <div key={ph.id} style={{border:"1px solid #d1d5db",overflow:"hidden"}}>
+                <div style={{position:"relative",height:150,background:"#f3f4f6"}}>
+                  <img src={ph.src} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                  <div style={{position:"absolute",top:5,left:5,background:"rgba(0,0,0,0.5)",color:"white",fontSize:"0.68rem",fontWeight:700,padding:"0.1rem 0.35rem"}}>
+                    {String.fromCharCode(65+pi)}
+                  </div>
+                  <div className="no-print" style={{position:"absolute",inset:0,display:"flex",alignItems:"flex-end",justifyContent:"flex-end",padding:"0.35rem",gap:"0.2rem",opacity:0,transition:"opacity 0.15s",background:"linear-gradient(to top,rgba(0,0,0,0.45) 0%,transparent 55%)"}}
+                    onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>
+                    <button onClick={()=>onAnnotate(ph,issue.id)} style={{background:"rgba(0,0,0,0.7)",color:"white",border:"none",padding:"0.25rem 0.55rem",fontSize:"0.7rem",cursor:"pointer"}}>✏️</button>
+                    <button onClick={()=>remPhoto(ph.id)} style={{background:"rgba(0,0,0,0.7)",color:"white",border:"none",padding:"0.25rem 0.55rem",fontSize:"0.7rem",cursor:"pointer"}}>✕</button>
+                  </div>
+                </div>
+                <AutoTA value={ph.caption} onChange={e=>capPhoto(ph.id,e.target.value)} className="no-print"
+                  placeholder="Caption…"
+                  style={{width:"100%",borderTop:"1px solid #d1d5db",padding:"0.3rem 0.55rem",fontSize:"0.72rem",color:"#374151",background:"white",boxSizing:"border-box",minHeight:"1.8rem",lineHeight:1.5}}/>
+                {ph.caption&&<div className="print-show" style={{borderTop:"1px solid #d1d5db",padding:"0.3rem 0.55rem",fontSize:"0.7rem",color:"#374151",lineHeight:1.5}}>{ph.caption}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="no-print" style={{marginTop:"0.5rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
+          <button onClick={()=>fileRef.current.click()}
+            style={{fontSize:"0.73rem",color:"#374151",border:"1px solid #d1d5db",background:"white",padding:"0.28rem 0.7rem",cursor:"pointer"}}>
+            + Add Photo(s)
+          </button>
+          <span style={{fontSize:"0.7rem",color:"#d1d5db"}}>or paste ⌘V / Ctrl+V anywhere</span>
+          <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Reports List ──────────────────────────────────────────────────── */
+function ReportsList({ index, onOpen, onCreate, onDelete }) {
+  const sorted=[...index].sort((a,b)=>b.updated-a.updated);
+  return (
+    <div style={{maxWidth:"40rem",margin:"0 auto",padding:"2.5rem 1rem"}}>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Site Observation Reports</h1>
+          <p className="text-gray-400 text-sm mt-1">{index.length} report{index.length!==1?"s":""} · saved locally</p>
+        </div>
+        <button onClick={onCreate} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow transition-colors">+ New Report</button>
+      </div>
+      {sorted.length===0?(
+        <div className="text-center" style={{paddingTop:"5rem",paddingBottom:"5rem"}}>
+          <div style={{fontSize:"3.5rem",marginBottom:"1rem"}}>📋</div>
+          <p className="text-xl font-semibold text-gray-700">No reports yet</p>
+          <p className="text-gray-400 mt-2 mb-6 text-sm">Create your first site observation report</p>
+          <button onClick={onCreate} className="bg-gray-800 hover:bg-gray-900 text-white px-6 py-3 rounded-xl font-semibold text-sm">Create Report</button>
+        </div>
+      ):sorted.map(r=>(
+        <div key={r.id} onClick={()=>onOpen(r.id)}
+          className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 mb-3 hover:shadow-md hover:border-gray-400 cursor-pointer flex items-center gap-4 transition-all">
+          <div className="bg-gray-100 rounded-xl flex items-center justify-center text-2xl flex-shrink-0" style={{width:"3rem",height:"3rem"}}>📋</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-gray-900 truncate">{r.project||"Untitled Project"}</h3>
+              <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0">#{r.reportNo}</span>
+            </div>
+            <p className="text-sm text-gray-400 mt-0.5 truncate">{r.address||"No address"} · {r.issues} observation{r.issues!==1?"s":""} · {r.updated?fmtShort(r.updated):""}</p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-gray-300">→</span>
+            <button onClick={e=>{e.stopPropagation();if(window.confirm("Delete this report? This cannot be undone."))onDelete(r.id);}}
+              className="text-gray-300 hover:text-red-500 hover:bg-red-50 text-xs px-2 py-1.5 rounded-lg">✕</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Party Field (name + address) ─────────────────────────────────── */
+function PartyField({ label, nameKey, addrKey, R, setR }) {
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">{label}</span>
+      </div>
+      <div className="p-2 space-y-1.5">
+        <input className="w-full border border-gray-200 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+          value={R[nameKey]} onChange={e=>setR({[nameKey]:e.target.value})} placeholder="Name / Company"/>
+        <textarea className="w-full border border-gray-200 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 resize-none"
+          rows={2} value={R[addrKey]} onChange={e=>setR({[addrKey]:e.target.value})}
+          placeholder={"Street\nCity, State ZIP"}/>
+      </div>
+    </div>
+  );
+}
+
+/* ── App ───────────────────────────────────────────────────────────── */
+function App() {
+  const [view,        setView]        = useState("loading");
+  const [idx,         setIdx]         = useState([]);
+  const [report,      setReport]      = useState(null);
+  const [annotCtx,    setAnnotCtx]    = useState(null);
+  const [toast,       setToast]       = useState(null);
+  const [dropping,    setDropping]    = useState(false);
+  const [saveStatus,  setSaveStatus]  = useState("saved");
+  const [autoFillIdx, setAutoFillIdx] = useState(null);
+  const [showLocs,    setShowLocs]    = useState(false);
+  const saveTimer=useRef(), dragCnt=useRef(0), logoRef=useRef();
+
+  const toast$=msg=>{setToast(msg);setTimeout(()=>setToast(null),2500);};
+
+  useEffect(()=>{
+    let el=document.getElementById("sor-page-style");
+    if(!el){el=document.createElement("style");el.id="sor-page-style";document.head.appendChild(el);}
+    const name=(report?.project||"").replace(/"/g,'\\"').replace(/\n/g," ");
+    el.textContent=`
+      @page{margin:1.4cm 1.8cm 2.2cm;size:A4 portrait;
+        @bottom-right{content:"Page " counter(page) " of " counter(pages);font-size:8pt;color:#9ca3af;font-family:Arial,Helvetica,sans-serif;}
+        @bottom-left{content:"${name}";font-size:8pt;color:#9ca3af;font-family:Arial,Helvetica,sans-serif;}}
+      @page :first{@bottom-left{content:"";}}
+    `;
+  },[report?.project]);
+
+  useEffect(()=>{const r=LS.get("sor-index");setIdx(r?JSON.parse(r.value):[]);setView("list");},[]);
+
+  useEffect(()=>{
+    if(!report)return;
+    setSaveStatus("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current=setTimeout(()=>{
+      try{
+        const up={...report,updated:Date.now()};
+        LS.set(`sor-${report.id}`,JSON.stringify(up));
+        setIdx(prev=>{
+          const entry={id:report.id,project:report.project,address:report.address,reportNo:report.reportNo,issues:report.issues.length,updated:up.updated};
+          const i=prev.findIndex(r=>r.id===report.id);
+          const next=i>=0?prev.map((r,j)=>j===i?entry:r):[...prev,entry];
+          LS.set("sor-index",JSON.stringify(next));return next;
+        });
+        setSaveStatus("saved");
+      }catch{setSaveStatus("error");}
+    },800);
+  },[report]);
+
+  const openReport=id=>{const r=LS.get(`sor-${id}`);if(r){setReport(JSON.parse(r.value));setView("report");}else toast$("Report not found");};
+  const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
+  const doAutoFill=selId=>{
+    setAutoFillIdx(null);
+    const r=LS.get(`sor-${selId}`);
+    if(r){
+      const s=JSON.parse(r.value);
+      setReport(blankReport({
+        project:s.project,projectNo:s.projectNo,address:s.address,
+        owner:s.owner,ownerAddr:s.ownerAddr||"",
+        architect:s.architect,architectAddr:s.architectAddr||"",
+        contractor:s.contractor,contractorAddr:s.contractorAddr||"",
+        distribution:s.distribution,logo:s.logo,locs:s.locs,reportNo:s.reportNo
+      }));
+    } else setReport(blankReport());
+    setView("report");
+  };
+  const deleteReport=id=>{LS.del(`sor-${id}`);setIdx(prev=>{const n=prev.filter(r=>r.id!==id);LS.set("sor-index",JSON.stringify(n));return n;});};
+
+  const setR=u=>setReport(p=>typeof u==="function"?u(p):{...p,...u});
+  const updateIssue=(id,fields,photos)=>setR(p=>({...p,issues:p.issues.map(i=>i.id!==id?i:{...i,...(fields||{}),...(photos!==undefined?{photos}:{})})}));
+  const deleteIssue=id=>setR(p=>({...p,issues:p.issues.filter(i=>i.id!==id)}));
+  const moveIssue=(id,d)=>setR(p=>{const a=[...p.issues],i=a.findIndex(x=>x.id===id),j=i+d;if(j<0||j>=a.length)return p;[a[i],a[j]]=[a[j],a[i]];return{...p,issues:a};});
+  const addIssue=()=>setR(p=>({...p,issues:[...p.issues,blankIssue()]}));
+  const handleLogoUpload=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setR({logo:ev.target.result});r.readAsDataURL(f);};
+
+  useEffect(()=>{
+    const fn=e=>{
+      if(view!=="report")return;
+      for(let it of(e.clipboardData?.items||[])){
+        if(it.type.startsWith("image/")){
+          const r=new FileReader();r.onload=ev=>{
+            setReport(p=>{
+              if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(ev.target.result)]}]};}
+              const last=p.issues[p.issues.length-1];
+              return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...i.photos,blankPhoto(ev.target.result)]}:i)};
+            });toast$("Photo pasted ✓");
+          };r.readAsDataURL(it.getAsFile());
+        }
+      }
+    };
+    window.addEventListener("paste",fn);return()=>window.removeEventListener("paste",fn);
+  },[view]);
+
+  const handleDrop=files=>{
+    Array.from(files).filter(f=>f.type.startsWith("image/")).forEach(file=>{
+      const r=new FileReader();r.onload=ev=>{
+        setReport(p=>{
+          if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(ev.target.result)]}]};}
+          const last=p.issues[p.issues.length-1];
+          return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...i.photos,blankPhoto(ev.target.result)]}:i)};
+        });
+      };r.readAsDataURL(file);
+    });toast$("Photo(s) added ✓");
+  };
+
+  if(view==="loading") return <div className="min-h-screen flex items-center justify-center"><div style={{fontSize:"2.5rem"}} className="animate-pulse">📋</div></div>;
+  if(autoFillIdx) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><AutoFillModal index={autoFillIdx} onSelect={doAutoFill} onSkip={()=>{setAutoFillIdx(null);setReport(blankReport());setView("report");}}/></div>;
+
+  if(view==="list") return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="bg-white border-b border-gray-200 no-print">
+        <div style={{maxWidth:"40rem",margin:"0 auto",padding:"0 1rem"}}>
+          <div className="flex items-center gap-3 py-3">
+            <div className="bg-gray-800 text-white rounded-xl flex items-center justify-center font-bold text-lg flex-shrink-0" style={{width:"2.25rem",height:"2.25rem"}}>📋</div>
+            <div className="font-bold text-gray-900 text-sm">Site Observation Report Builder</div>
+          </div>
+        </div>
+      </div>
+      <ReportsList index={idx} onOpen={openReport} onCreate={createReport} onDelete={deleteReport}/>
+    </div>
+  );
+
+  if(view==="report"&&report){
+    const R=report;
+    const flagCount=R.issues.filter(i=>isFlagged(i.type)).length;
+
+    const locOrder=[], locMap={};
+    R.issues.forEach(iss=>{
+      if(iss.loc&&!locMap.hasOwnProperty(iss.loc)){locMap[iss.loc]=locOrder.length+1;locOrder.push(iss.loc);}
+    });
+    const locSubCount={};
+    const displayNums=R.issues.map(iss=>{
+      if(!iss.loc) return "—";
+      const maj=locMap[iss.loc];
+      locSubCount[iss.loc]=(locSubCount[iss.loc]||0)+1;
+      return `${maj}.${locSubCount[iss.loc]}`;
+    });
+
+    const groups=[], groupByLoc={};
+    R.issues.forEach((iss,fi)=>{
+      const key=iss.loc||"";
+      if(!groupByLoc[key]){const locNum=iss.loc?locMap[iss.loc]:null;groupByLoc[key]={loc:iss.loc||"",locNum,items:[]};groups.push(groupByLoc[key]);}
+      groupByLoc[key].items.push({iss,flatIdx:fi,displayNum:displayNums[fi]});
+    });
+
+    const LBL={fontSize:"0.6rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:"#9ca3af",display:"block",marginBottom:"0.1rem"};
+    const VAL={fontSize:"0.82rem",color:"#1f2937"};
+    const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
+    const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"0.8rem"};
+
+    return (
+      <div className="min-h-screen bg-slate-50"
+        onDragOver={e=>e.preventDefault()}
+        onDragEnter={e=>{e.preventDefault();dragCnt.current++;setDropping(true);}}
+        onDragLeave={e=>{e.preventDefault();if(--dragCnt.current===0)setDropping(false);}}
+        onDrop={e=>{e.preventDefault();dragCnt.current=0;setDropping(false);handleDrop(e.dataTransfer.files);}}>
+
+        {dropping&&<div className="fixed inset-0 z-50 bg-blue-500 bg-opacity-20 border-4 border-dashed border-blue-400 flex items-center justify-center pointer-events-none">
+          <div className="bg-white rounded-3xl shadow-2xl text-center" style={{padding:"2rem 3rem"}}><div style={{fontSize:"3rem",marginBottom:"0.5rem"}}>🖼️</div><p className="text-xl font-bold">Drop to add photo</p></div>
+        </div>}
+        {toast&&<div className="fixed top-4 left-1/2 z-50 bg-gray-900 text-white text-sm font-medium px-5 py-2.5 rounded-full shadow-lg pointer-events-none" style={{transform:"translateX(-50%)"}}>
+          {toast}
+        </div>}
+        {annotCtx&&<AnnotationModal photo={annotCtx.photo} onClose={()=>setAnnotCtx(null)}
+          onSave={src=>{const iss=R.issues.find(i=>i.id===annotCtx.issueId);if(iss)updateIssue(annotCtx.issueId,undefined,iss.photos.map(p=>p.id===annotCtx.photo.id?{...p,src}:p));setAnnotCtx(null);toast$("Annotation saved ✓");}}/>}
+        {showLocs&&<LocManager locs={R.locs} onChange={locs=>setR({locs})} onClose={()=>setShowLocs(false)}/>}
+
+        {/* Nav */}
+        <div className="bg-white border-b border-gray-200 sticky top-0 z-20 no-print">
+          <div style={{maxWidth:"64rem",margin:"0 auto",padding:"0 1rem"}}>
+            <div className="flex items-center gap-3 py-3">
+              <button onClick={()=>setView("list")} className="text-gray-500 hover:text-gray-900 text-sm font-medium flex-shrink-0">← Reports</button>
+              <div className="w-px bg-gray-200" style={{height:"1.25rem"}}/>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-gray-900 text-sm truncate">{R.project||"Untitled"} — SOR #{R.reportNo}</div>
+                <div className="text-xs flex items-center gap-1.5">
+                  {saveStatus==="saving"&&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse"/><span className="text-yellow-500">Saving…</span></>}
+                  {saveStatus==="saved" &&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"/><span className="text-gray-400">Saved</span></>}
+                  {saveStatus==="error" &&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400"/><span className="text-red-400">Save error</span></>}
+                  <span className="text-gray-300">·</span>
+                  <span className="text-gray-400">{R.issues.length} observation{R.issues.length!==1?"s":""}</span>
+                  {flagCount>0&&<span style={{background:"#fce4f0",color:"#9d174d",fontSize:"0.65rem",fontWeight:700,padding:"0.1rem 0.5rem",borderRadius:"999px"}}>{flagCount} flagged</span>}
+                </div>
+              </div>
+              <button onClick={()=>setShowLocs(true)} className="text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-3 py-2 rounded-xl text-xs font-medium border border-gray-200 flex-shrink-0">🏢 Locations</button>
+              <button onClick={()=>window.print()} disabled={R.issues.length===0}
+                className="bg-gray-800 hover:bg-gray-900 disabled:opacity-40 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow flex-shrink-0">⬇ Export PDF</button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{maxWidth:"64rem",margin:"0 auto",padding:"1.5rem 1rem"}}>
+
+          {/* ── Report Header ── */}
+          <div className="bg-white shadow-sm" style={{border:"1px solid #d1d5db",borderRadius:0,marginBottom:"1.25rem"}}>
+
+            {/* PRINT header */}
+            <div className="print-show">
+              <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"1.5rem 2rem 1rem",borderBottom:"1.5px solid #111827"}}>
+                <div style={{flexShrink:0}}>
+                  {R.logo?<img src={R.logo} alt="Logo" style={{maxHeight:"3.5rem",maxWidth:"11rem",objectFit:"contain"}}/>:<div style={{width:"8rem"}}/>}
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <p style={{fontSize:"0.58rem",fontWeight:700,letterSpacing:"0.18em",textTransform:"uppercase",color:"#9ca3af",margin:"0 0 0.15rem"}}>Site Observation Report</p>
+                  <p style={{fontSize:"1.25rem",fontWeight:700,color:"#111827",margin:"0 0 0.1rem",lineHeight:1.2}}>{R.project||"—"}</p>
+                  {R.projectNo&&<p style={{fontSize:"0.78rem",color:"#6b7280",margin:"0 0 0.1rem"}}>Project No. {R.projectNo}</p>}
+                  <p style={{fontSize:"0.78rem",color:"#9ca3af",margin:0}}>{R.address||"—"}</p>
+                </div>
+              </div>
+              {/* Party block */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.45rem 2rem",padding:"0.8rem 2rem 0.6rem",borderBottom:"1px solid #e5e7eb"}}>
+                {[["Project Owner",R.owner,R.ownerAddr],["Architect",R.architect,R.architectAddr],["Contractor",R.contractor,R.contractorAddr]].map(([lbl,name,addr])=>(
+                  <div key={lbl}>
+                    <span style={LBL}>{lbl}</span>
+                    <span style={VAL}>{name||"—"}</span>
+                    {addr&&<div style={{...VAL_SM,whiteSpace:"pre-line",marginTop:"0.1rem"}}>{addr}</div>}
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.45rem 2rem",padding:"0.6rem 2rem"}}>
+                <div><span style={LBL}>Field Report No.</span><span style={VAL}>#{R.reportNo}</span></div>
+                <div><span style={LBL}>Date of Issuance</span><span style={VAL}>{fmtd(R.issued)}</span></div>
+                <div><span style={LBL}>Date of Site Visit</span><span style={VAL}>{fmtd(R.visited)}</span></div>
+              </div>
+              <div style={{padding:"0 2rem 0.6rem",borderTop:"1px solid #e5e7eb",paddingTop:"0.5rem"}}>
+                <span style={LBL}>Distribution</span>
+                <span style={{...VAL,display:"inline"}}>{(R.distribution||"—").split("\n").filter(Boolean).join(" · ")}</span>
+              </div>
+              <div style={{padding:"0.45rem 2rem 0.9rem",borderTop:"1px solid #e5e7eb"}}>
+                <p style={{fontSize:"0.62rem",color:"#9ca3af",lineHeight:1.65,fontStyle:"italic",margin:0}}>{DISCLAIMER}</p>
+              </div>
+            </div>
+
+            {/* SCREEN form */}
+            <div className="no-print p-5 space-y-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Report Header</p>
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0">
+                  {R.logo
+                    ?<div className="relative group">
+                        <img src={R.logo} alt="Logo" style={{height:"3.5rem",maxWidth:"10rem",objectFit:"contain",border:"1px solid #e5e7eb",borderRadius:"0.5rem"}}/>
+                        <button onClick={()=>setR({logo:""})} className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 text-xs items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style={{display:"flex"}}>✕</button>
+                      </div>
+                    :<button onClick={()=>logoRef.current.click()}
+                        className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 hover:border-gray-400 text-gray-400 hover:text-gray-600 transition-colors"
+                        style={{width:"8rem",height:"3.5rem",fontSize:"0.7rem",fontWeight:600,borderRadius:"0.5rem"}}>
+                        <span style={{fontSize:"1.2rem"}}>🏢</span>Upload Logo
+                      </button>
+                  }
+                  <input ref={logoRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleLogoUpload}/>
+                </div>
+                <div className="flex-1 space-y-2">
+                  <input className="w-full text-xl font-bold text-gray-900 border-b-2 border-gray-100 focus:border-gray-400 focus:outline-none pb-1 bg-transparent"
+                    value={R.project} onChange={e=>setR({project:e.target.value})} placeholder="Project Name"/>
+                  <div className="flex gap-3">
+                    <input className="flex-1 text-sm text-gray-600 border-b border-gray-100 focus:border-gray-300 focus:outline-none pb-1 bg-transparent"
+                      value={R.projectNo} onChange={e=>setR({projectNo:e.target.value})} placeholder="Project No."/>
+                    <input className="flex-1 text-sm text-gray-600 border-b border-gray-100 focus:border-gray-300 focus:outline-none pb-1 bg-transparent"
+                      value={R.address} onChange={e=>setR({address:e.target.value})} placeholder="Project Address"/>
+                  </div>
+                </div>
+              </div>
+
+              {/* Owner / Architect / Contractor — each with address */}
+              <div className="grid grid-cols-3 gap-3">
+                <PartyField label="Project Owner"  nameKey="owner"     addrKey="ownerAddr"     R={R} setR={setR}/>
+                <PartyField label="Architect"       nameKey="architect" addrKey="architectAddr" R={R} setR={setR}/>
+                <PartyField label="Contractor"      nameKey="contractor" addrKey="contractorAddr" R={R} setR={setR}/>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Field Report No.</span>
+                  <input type="number" min="1" max="999" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                    value={R.reportNo} onChange={e=>setR({reportNo:parseInt(e.target.value)||1})}/>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Date of Issuance</span>
+                  <input type="date" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                    value={R.issued} onChange={e=>setR({issued:e.target.value})}/>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Date of Site Visit</span>
+                  <input type="date" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                    value={R.visited} onChange={e=>setR({visited:e.target.value})}/>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Distribution List</span>
+                  <textarea className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 resize-none"
+                    rows={3} value={R.distribution} onChange={e=>setR({distribution:e.target.value})}
+                    placeholder={"John Smith – Owner\nJane Doe – Architect\nBob Johnson – GC"}/>
+                </label>
+              </div>
+              <div className="border-t border-gray-100 pt-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Disclaimer (printed on all reports)</p>
+                <p className="text-xs text-gray-400 leading-relaxed italic">{DISCLAIMER}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Observations ── */}
+          <div style={{marginBottom:"1.25rem"}}>
+            <div className="no-print flex items-center justify-between" style={{marginBottom:"0.75rem"}}>
+              <h2 className="font-bold text-gray-800 text-base">
+                Site Observations
+                <span className="text-gray-400 font-normal text-sm" style={{marginLeft:"0.5rem"}}>({R.issues.length})</span>
+              </h2>
+              <button onClick={addIssue} className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors">+ Add Observation</button>
+            </div>
+
+            {R.issues.length===0&&(
+              <div className="text-center no-print" style={{paddingTop:"4rem",paddingBottom:"4rem"}}>
+                <div style={{fontSize:"3rem",marginBottom:"0.75rem"}}>🏗️</div>
+                <p className="font-semibold text-gray-400">No observations yet</p>
+                <p className="text-sm text-gray-300" style={{marginTop:"0.25rem",marginBottom:"1.25rem"}}>Document your first site condition, defect, or item requiring follow-up</p>
+                <button onClick={addIssue} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Add First Observation</button>
+              </div>
+            )}
+
+            {groups.map(group=>(
+              <div key={group.loc||"__none__"}>
+                {group.loc&&<div style={LOC_HDR}>{group.locNum}. {group.loc}</div>}
+                {!group.loc&&group.items.length>0&&<div style={{...LOC_HDR,color:"#9ca3af",fontStyle:"italic"}}>No Location Assigned</div>}
+                {group.items.map(({iss,flatIdx,displayNum})=>(
+                  <IssueCard key={iss.id} issue={iss} displayNum={displayNum} flatIdx={flatIdx} total={R.issues.length} locs={R.locs}
+                    onUpdate={updateIssue} onDelete={deleteIssue}
+                    onMoveUp={id=>moveIssue(id,-1)} onMoveDown={id=>moveIssue(id,1)}
+                    onAnnotate={(ph,issueId)=>setAnnotCtx({photo:ph,issueId})}/>
+                ))}
+              </div>
+            ))}
+
+            {R.issues.length>0&&(
+              <button onClick={addIssue} className="no-print w-full border-2 border-dashed border-gray-200 hover:border-gray-400 text-gray-400 hover:text-gray-600 text-sm font-medium transition-colors" style={{padding:"0.85rem",marginTop:"0.6rem",borderRadius:"0.75rem"}}>
+                + Add Another Observation
+              </button>
+            )}
+          </div>
+          <div style={{height:"2rem"}}/>
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
