@@ -70,6 +70,7 @@ const FB = (() => {
 const DISCLAIMER  = "This report is considered to be a factual representation of site observation/meeting field notes. Attendees and recipients are requested to advise the undersigned of any corrections or questions within five business days following receipt, otherwise it will be understood the report is accepted as written.";
 const ISSUE_TYPES = ["General Observation","Defect Noted","Issue Noted"];
 const DEFAULT_LOCS= ["Basement / B1","Level 1","Level 2","Level 3","Roof","Exterior","Site"];
+const LOGO_SVG = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 112"><text font-family="Arial,Helvetica,sans-serif" font-size="78" font-weight="300" letter-spacing="7" y="84"><tspan fill="#2b2b2b">RHODE</tspan><tspan fill="#1b3c6e"> : PARTNERS</tspan></text></svg>');
 const FIRM_NAME   = "Rhode Partners, Inc.";
 const FIRM_ADDR   = "515 Congress Ave #1600\nAustin, Texas 78701";
 const DIST_LIST   = "Owner · Architect · General Contractor";
@@ -86,7 +87,7 @@ const blankReport = (pre={}) => ({
   architect:FIRM_NAME, architectAddr:FIRM_ADDR,
   contractor:pre.contractor||"", contractorAddr:pre.contractorAddr||"",
   issued:today(), visited:today(),
-  issues:[], logo:pre.logo||"",
+  issues:[], logo:pre.logo||LOGO_SVG,
   useLocations:pre.useLocations!==undefined?pre.useLocations:true,
   locs:pre.locs?[...pre.locs]:[...DEFAULT_LOCS],
   created:Date.now(), updated:Date.now()
