@@ -8,7 +8,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   * { font-family: Arial, Helvetica, sans-serif !important; }
   body { margin:0; background:#f8fafc; }
@@ -36,101 +35,38 @@ const LS = {
   del: k     => { try{localStorage.removeItem(k);}catch{} }
 };
 
-/* ── Google Drive Module ───────────────────────────────────────────── */
-const GDrive = (() => {
-  const SCOPE = "https://www.googleapis.com/auth/drive.file";
-  const API   = "https://www.googleapis.com/drive/v3";
-  const UP    = "https://www.googleapis.com/upload/drive/v3";
-  const FNAME = "Rhode Partners - Site Observation Reports";
-  let tok=null, exp=0, cli=null, fid=null;
-  const fm={};
+/* ── Firebase Realtime Database Module ────────────────────────────── */
+const FB = (() => {
+  // Hardcode your Firebase Database URL here once you have it:
+  const HARDCODED_URL = "https://rhode-field-reports-default-rtdb.firebaseio.com";
 
-  const cid    = () => localStorage.getItem("sor-gcid")||"";
-  const isConf = () => !!cid();
-  const isAuth = () => !!tok && Date.now()<exp;
-  const setTok = r => { tok=r.access_token; exp=Date.now()+(r.expires_in-60)*1000; };
+  const dbUrl = () => HARDCODED_URL || localStorage.getItem("sor-fburl") || "";
+  const isConf = () => !!dbUrl();
+  const setUrl = u => localStorage.setItem("sor-fburl", u.replace(/\/$/, ""));
 
-  const ensureTok = () => new Promise((res,rej)=>{
-    if(isAuth()){res();return;}
-    if(!cid()){rej("no-client-id");return;}
-    if(typeof google==="undefined"||!google.accounts){rej("gis-unavailable");return;}
-    if(!cli) cli=google.accounts.oauth2.initTokenClient({client_id:cid(),scope:SCOPE,callback:r=>r.error?rej(r.error):(setTok(r),res())});
-    else cli.callback=r=>r.error?rej(r.error):(setTok(r),res());
-    cli.requestAccessToken({prompt:tok?"":"consent"});
-  });
-
-  const req = async (method,url,body,params) => {
-    await ensureTok();
-    const qs=params?"?"+new URLSearchParams(params):"";
-    const o={method,headers:{Authorization:`Bearer ${tok}`}};
-    if(body){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(body);}
-    const r=await fetch(url+qs,o);
-    if(r.status===204) return {};
-    return r.json();
+  const req = async (method, path, body) => {
+    const url = `${dbUrl()}${path}.json`;
+    const opts = { method, headers: {"Content-Type":"application/json"} };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error(`Firebase ${r.status}`);
+    return method === "DELETE" ? null : r.json();
   };
 
-  const upload = async (meta,data,fileId) => {
-    await ensureTok();
-    const form=new FormData();
-    form.append("metadata",new Blob([JSON.stringify(meta)],{type:"application/json"}));
-    form.append("file",new Blob([JSON.stringify(data)],{type:"application/json"}));
-    const url=fileId?`${UP}/files/${fileId}?uploadType=multipart`:`${UP}/files?uploadType=multipart`;
-    const r=await fetch(url,{method:fileId?"PATCH":"POST",headers:{Authorization:`Bearer ${tok}`},body:form});
-    return r.json();
+  const loadAll = async () => {
+    const data = await req("GET", "/reports");
+    if (!data) return [];
+    return Object.values(data).filter(r => r && !r.archived);
   };
 
-  const folder = async () => {
-    if(fid) return fid;
-    const res=await req("GET",`${API}/files`,null,{q:`name='${FNAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:"files(id)"});
-    if(res.files?.length){fid=res.files[0].id;return fid;}
-    const f=await req("POST",`${API}/files`,{name:FNAME,mimeType:"application/vnd.google-apps.folder"});
-    fid=f.id;
-    await req("POST",`${API}/files/${fid}/permissions`,{role:"reader",type:"anyone"});
-    return fid;
-  };
+  const save    = async report => req("PUT", `/reports/${report.id}`, report);
+  const archive = async id     => req("PATCH", `/reports/${id}`, {archived: true});
+  const del  = archive; // alias — we never hard-delete from Firebase
 
-  const signIn  = async ()=>{await ensureTok();};
-  const signOut = ()=>{
-    if(tok) try{google.accounts.oauth2.revoke(tok,()=>{});}catch{}
-    tok=null;exp=0;fid=null;cli=null;Object.keys(fm).forEach(k=>delete fm[k]);
-  };
-  const setCid  = id=>{localStorage.setItem("sor-gcid",id);cli=null;};
-
-  const loadAll = async ()=>{
-    const f=await folder();
-    const res=await req("GET",`${API}/files`,null,{q:`'${f}' in parents and trashed=false`,fields:"files(id,name)"});
-    const reports=[];
-    for(const file of (res.files||[])){
-      if(!file.name.startsWith("report-")) continue;
-      const id=file.name.replace("report-","").replace(".json","");
-      fm[id]=file.id;
-      try{
-        const r=await fetch(`${API}/files/${file.id}?alt=media`,{headers:{Authorization:`Bearer ${tok}`}});
-        const d=await r.json();
-        if(d?.id) reports.push(d);
-      }catch{}
-    }
-    return reports;
-  };
-
-  const save = async rep=>{
-    const f=await folder();
-    const fileId=fm[rep.id];
-    const meta=fileId?{}:{name:`report-${rep.id}.json`,parents:[f],mimeType:"application/json"};
-    const result=await upload(meta,rep,fileId);
-    if(result?.id) fm[rep.id]=result.id;
-  };
-
-  const del = async id=>{
-    const fileId=fm[id];if(!fileId)return;
-    await req("DELETE",`${API}/files/${fileId}`);
-    delete fm[id];
-  };
-
-  return {isConf,isAuth,signIn,signOut,setCid,cid,loadAll,save,del};
+  return { isConf, dbUrl, setUrl, loadAll, save, del };
 })();
 
-/* ── Constants & Helpers ───────────────────────────────────────────── */
+/* ── Constants ─────────────────────────────────────────────────────── */
 const DISCLAIMER  = "This report is considered to be a factual representation of site observation/meeting field notes. Attendees and recipients are requested to advise the undersigned of any corrections or questions within five business days following receipt, otherwise it will be understood the report is accepted as written.";
 const ISSUE_TYPES = ["General Observation","Defect Noted","Issue Noted"];
 const DEFAULT_LOCS= ["Basement / B1","Level 1","Level 2","Level 3","Roof","Exterior","Site"];
@@ -141,7 +77,7 @@ const DIST_LIST   = "Owner · Architect · General Contractor";
 const today    = () => new Date().toISOString().split("T")[0];
 const fmtd     = d  => d?new Date(d+"T12:00:00").toLocaleDateString([],{month:"long",day:"numeric",year:"numeric"}):"—";
 const fmtShort = ts => new Date(ts).toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
-const isFlagged= t  => t==="Defect Noted"||t==="Issue Noted";
+const isFlagged = t => t==="Defect Noted"||t==="Issue Noted";
 
 const blankReport = (pre={}) => ({
   id:Date.now().toString(), reportNo:pre.reportNo!=null?pre.reportNo+1:1,
@@ -158,13 +94,13 @@ const blankReport = (pre={}) => ({
 const blankIssue = () => ({id:Date.now()+Math.random(),loc:"",desc:"",photos:[],type:"General Observation"});
 const blankPhoto = src => ({id:Date.now()+Math.random(),src,ts:Date.now()});
 
-const compressImage = (src,cb) => {
+const compressImage = (src, cb) => {
   const img=new Image();
   img.onload=()=>{
-    const MAX=1400;let w=img.naturalWidth,h=img.naturalHeight;
+    const MAX=1400; let w=img.naturalWidth,h=img.naturalHeight;
     if(w>MAX||h>MAX){const r=Math.min(MAX/w,MAX/h);w=Math.round(w*r);h=Math.round(h*r);}
-    const c=document.createElement("canvas");c.width=w;c.height=h;
-    c.getContext("2d").drawImage(img,0,0,w,h);cb(c.toDataURL("image/jpeg",0.75));
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d").drawImage(img,0,0,w,h); cb(c.toDataURL("image/jpeg",0.75));
   };
   img.src=src;
 };
@@ -289,62 +225,55 @@ function AutoFillModal({index,onSelect,onSkip}){
   );
 }
 
-/* ── Drive Setup Modal ─────────────────────────────────────────────── */
-function DriveSetupModal({onClose}){
-  const [cid,setCidLocal]=useState(GDrive.cid());
+/* ── Firebase Setup Modal ──────────────────────────────────────────── */
+function FirebaseSetupModal({onClose}){
+  const [url,setUrl]=useState(FB.dbUrl());
   const [page,setPage]=useState("form");
-  const save=()=>{GDrive.setCid(cid.trim());onClose(true);};
+  const save=()=>{FB.setUrl(url.trim());onClose(true);};
   const STEPS=[
-    ["1. Create a Google Cloud Project",[
-      <>Go to <a href="https://console.cloud.google.com" target="_blank" className="text-blue-600 underline">console.cloud.google.com</a></>,
-      "Click the project dropdown at the top → New Project",
-      'Name it (e.g. "Rhode Partners SOR") → Create'
+    ["1. Create a Firebase Project",[
+      <span>Go to <a href="https://console.firebase.google.com" target="_blank" className="text-blue-600 underline">console.firebase.google.com</a></span>,
+      "Click Add project → give it a name (e.g. Rhode Partners SOR)",
+      "Disable Google Analytics (not needed) → Create project"
     ]],
-    ["2. Enable Google Drive API",[
-      "In the left menu: APIs & Services → Library",
-      'Search for "Google Drive API" → Click it → Enable'
+    ["2. Create a Realtime Database",[
+      "In the left sidebar: Build → Realtime Database",
+      "Click Create Database",
+      "Choose United States as the location → Next",
+      'Select "Start in test mode" → Enable',
+      "Your database is now created"
     ]],
-    ["3. Configure OAuth Consent Screen",[
-      "Go to APIs & Services → OAuth consent screen",
-      "Choose External → Create",
-      "Fill in App name and your email → Save & Continue",
-      'Click "Add or Remove Scopes" → search "drive.file" → check it → Update',
-      "Add Test Users: add each team member's Google email address",
-      "Save & Continue through remaining steps"
+    ["3. Set Security Rules to Public",[
+      'Click the Rules tab at the top of the Realtime Database page',
+      "Replace the contents with:",
+      <pre className="bg-gray-100 rounded p-2 text-xs mt-1 font-mono whitespace-pre">{`{\n  "rules": {\n    ".read": true,\n    ".write": true\n  }\n}`}</pre>,
+      "Click Publish"
     ]],
-    ["4. Create OAuth Credentials",[
-      "Go to APIs & Services → Credentials",
-      "Click + Create Credentials → OAuth 2.0 Client IDs",
-      "Application type: Web application",
-      "Under Authorized JavaScript origins, add your GitHub Pages URL:",
-      <span className="font-mono bg-gray-100 px-1 rounded">https://[your-username].github.io</span>,
-      "Also add http://localhost for local testing",
-      "Click Create → copy the Client ID"
-    ]],
-    ["5. Enter Client ID Below",[
-      "Return to this screen and paste your Client ID",
-      "Click Save & Connect — you'll be prompted to sign in with Google"
+    ["4. Copy Your Database URL",[
+      'At the top of the Realtime Database page you\'ll see a URL like:',
+      <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-xs">https://your-project-default-rtdb.firebaseio.com</span>,
+      "Copy that URL and paste it below"
     ]]
   ];
   if(page==="instructions") return (
-    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg my-4 flex flex-col" style={{maxHeight:"90vh"}}>
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col" style={{maxHeight:"90vh"}}>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
-          <h3 className="font-bold text-gray-900">Google Cloud Setup Guide</h3>
+          <h3 className="font-bold text-gray-900">Firebase Setup Guide</h3>
           <button onClick={()=>setPage("form")} className="text-blue-600 text-sm font-medium">← Back</button>
         </div>
         <div className="p-5 space-y-5 overflow-y-auto text-sm text-gray-700 flex-1">
           {STEPS.map(([title,steps])=>(
             <div key={title}>
               <p className="font-bold text-gray-900 mb-2">{title}</p>
-              <ol className="space-y-1.5 list-decimal list-inside text-gray-600">
+              <ol className="space-y-2 list-decimal list-inside text-gray-600">
                 {steps.map((s,i)=><li key={i} style={{paddingLeft:"0.25rem"}}>{s}</li>)}
               </ol>
             </div>
           ))}
           <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
-            <p className="text-xs text-yellow-800 font-semibold mb-1">⚠ Important note on Test Users</p>
-            <p className="text-xs text-yellow-700">While your app is in "Testing" mode in Google Cloud, only the email addresses you add as Test Users can sign in. Add all team members' Google accounts. You can submit for verification later if needed.</p>
+            <p className="text-xs text-yellow-800 font-semibold mb-1">⚠ Note on test mode</p>
+            <p className="text-xs text-yellow-700">Test mode rules expire after 30 days by default. After setup, go back to the Rules tab and remove the expiry date from the rules to keep them permanent. Alternatively, once you give me the database URL I can include a reminder in the app.</p>
           </div>
         </div>
         <div className="px-5 py-3 border-t border-gray-100 flex-shrink-0">
@@ -358,27 +287,26 @@ function DriveSetupModal({onClose}){
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <h3 className="font-bold text-gray-900">Connect Google Drive</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Reports will sync automatically across all devices</p>
+            <h3 className="font-bold text-gray-900">Connect Shared Library</h3>
+            <p className="text-xs text-gray-400 mt-0.5">All team members will share the same reports — no sign-in required</p>
           </div>
           <button onClick={()=>onClose(false)} className="text-gray-400 hover:text-gray-700 text-xl">✕</button>
         </div>
         <div className="p-5 space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Google OAuth Client ID</label>
+            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Firebase Database URL</label>
             <input className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 font-mono"
-              value={cid} onChange={e=>setCidLocal(e.target.value)} placeholder="123456789-abc...apps.googleusercontent.com"/>
+              value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://your-project-default-rtdb.firebaseio.com"/>
           </div>
           <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
-            <p className="text-xs text-blue-700 font-medium mb-1">Don't have a Client ID yet?</p>
-            <p className="text-xs text-blue-600 mb-2">You'll need to set up a free Google Cloud project. It takes about 10 minutes and only needs to be done once.</p>
+            <p className="text-xs text-blue-700 font-medium mb-1">Don't have a database yet?</p>
+            <p className="text-xs text-blue-600 mb-2">You'll need to create a free Firebase project. Takes about 5 minutes and only needs to be done once.</p>
             <button onClick={()=>setPage("instructions")} className="text-xs text-blue-700 font-semibold underline">View step-by-step setup instructions →</button>
           </div>
-          <p className="text-xs text-gray-400">Each team member will be prompted to sign in with their Google account the first time. After that, reports sync automatically whenever saved.</p>
         </div>
         <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
           <button onClick={()=>onClose(false)} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm hover:bg-gray-50">Cancel</button>
-          <button onClick={save} disabled={!cid.trim()} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900 disabled:opacity-40">Save & Connect</button>
+          <button onClick={save} disabled={!url.trim()} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900 disabled:opacity-40">Save & Connect</button>
         </div>
       </div>
     </div>
@@ -474,7 +402,7 @@ function PartyField({label,nameKey,addrKey,R,setR}){
 }
 
 /* ── Reports List ──────────────────────────────────────────────────── */
-function ReportsList({index,onOpen,onCreate,onDelete,driveStatus,onDriveClick}){
+function ReportsList({index,onOpen,onCreate,onDelete,syncStatus,onSyncClick,onRefresh}){
   const sorted=[...index].sort((a,b)=>b.updated-a.updated);
   const groups={};
   sorted.forEach(r=>{const k=r.project||"Untitled Project";if(!groups[k])groups[k]=[];groups[k].push(r);});
@@ -482,11 +410,11 @@ function ReportsList({index,onOpen,onCreate,onDelete,driveStatus,onDriveClick}){
   const [collapsed,setCollapsed]=useState({});
   const toggle=n=>setCollapsed(p=>({...p,[n]:!p[n]}));
 
-  const driveBtn = () => {
-    if(driveStatus==="connected") return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 border border-green-200 text-xs font-medium text-green-700"><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>Drive Synced</div>;
-    if(driveStatus==="syncing")   return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block"/>Syncing…</div>;
-    if(driveStatus==="error")     return <button onClick={onDriveClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-xs font-medium text-red-600 hover:bg-red-100"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>Drive Error — Retry</button>;
-    return <button onClick={onDriveClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:border-gray-400 transition-all">☁ Connect Drive</button>;
+  const syncBtn=()=>{
+    if(syncStatus==="synced")   return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 border border-green-200 text-xs font-medium text-green-700 cursor-pointer hover:bg-green-100" onClick={onRefresh}><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>Synced · Refresh</div>;
+    if(syncStatus==="syncing")  return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block"/>Syncing…</div>;
+    if(syncStatus==="error")    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-xs font-medium text-red-600 hover:bg-red-100"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>Sync Error · Retry</button>;
+    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:border-gray-400 transition-all">☁ Connect Shared Library</button>;
   };
 
   return (
@@ -497,11 +425,10 @@ function ReportsList({index,onOpen,onCreate,onDelete,driveStatus,onDriveClick}){
           <p className="text-gray-400 text-sm mt-1">{names.length} project{names.length!==1?"s":""} · {index.length} report{index.length!==1?"s":""}</p>
         </div>
         <div className="flex items-center gap-2">
-          {driveBtn()}
+          {syncBtn()}
           <button onClick={onCreate} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow transition-colors">+ New Report</button>
         </div>
       </div>
-
       {index.length===0?(
         <div className="text-center" style={{paddingTop:"5rem",paddingBottom:"5rem"}}>
           <div style={{fontSize:"3.5rem",marginBottom:"1rem"}}>📋</div>
@@ -517,7 +444,9 @@ function ReportsList({index,onOpen,onCreate,onDelete,driveStatus,onDriveClick}){
               <span className="text-gray-400 text-xs font-bold" style={{width:"1rem"}}>{collapsed[name]?"▶":"▼"}</span>
               <div>
                 <div className="font-bold text-gray-900 text-sm">{name}</div>
-                <div className="text-xs text-gray-400">{groups[name].length} report{groups[name].length!==1?"s":""}{groups[name].some(r=>r.flagged>0)?<span className="ml-2 text-red-500">· {groups[name].reduce((s,r)=>s+(r.flagged||0),0)} flagged</span>:""}</div>
+                <div className="text-xs text-gray-400">{groups[name].length} report{groups[name].length!==1?"s":""}
+                  {groups[name].reduce((s,r)=>s+(r.flagged||0),0)>0&&<span className="ml-2 text-red-500">· {groups[name].reduce((s,r)=>s+(r.flagged||0),0)} flagged</span>}
+                </div>
               </div>
             </div>
           </button>
@@ -531,7 +460,9 @@ function ReportsList({index,onOpen,onCreate,onDelete,driveStatus,onDriveClick}){
                   <span className="font-medium text-gray-900 text-sm">Report #{r.reportNo}</span>
                   {r.address&&<><span className="text-gray-300 text-xs">·</span><span className="text-gray-500 text-sm truncate">{r.address}</span></>}
                 </div>
-                <p className="text-xs text-gray-400 mt-0.5">{r.issues} observation{r.issues!==1?"s":""}{r.flagged>0?<span className="text-red-500 ml-1">· {r.flagged} flagged</span>:""} · {r.updated?fmtShort(r.updated):""}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{r.issues} observation{r.issues!==1?"s":""}
+                  {r.flagged>0&&<span className="text-red-500 ml-1">· {r.flagged} flagged</span>} · {r.updated?fmtShort(r.updated):""}
+                </p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <span className="text-gray-300">→</span>
@@ -547,29 +478,58 @@ function ReportsList({index,onOpen,onCreate,onDelete,driveStatus,onDriveClick}){
 
 /* ── App ───────────────────────────────────────────────────────────── */
 function App(){
-  const [view,        setView]        = useState("loading");
-  const [idx,         setIdx]         = useState([]);
-  const [report,      setReport]      = useState(null);
-  const [annotCtx,    setAnnotCtx]    = useState(null);
-  const [toast,       setToast]       = useState(null);
-  const [dropping,    setDropping]    = useState(false);
-  const [saveStatus,  setSaveStatus]  = useState("saved");
-  const [autoFillIdx, setAutoFillIdx] = useState(null);
-  const [showLocs,    setShowLocs]    = useState(false);
-  const [driveStatus, setDriveStatus] = useState("unconfigured"); // unconfigured|disconnected|signing-in|connected|syncing|error
-  const [showDriveSetup, setShowDriveSetup] = useState(false);
+  const [view,         setView]         = useState("loading");
+  const [idx,          setIdx]          = useState([]);
+  const [report,       setReport]       = useState(null);
+  const [annotCtx,     setAnnotCtx]     = useState(null);
+  const [toast,        setToast]        = useState(null);
+  const [dropping,     setDropping]     = useState(false);
+  const [saveStatus,   setSaveStatus]   = useState("saved");
+  const [autoFillIdx,  setAutoFillIdx]  = useState(null);
+  const [showLocs,     setShowLocs]     = useState(false);
+  const [syncStatus,   setSyncStatus]   = useState("idle"); // idle|syncing|synced|error
+  const [showFBSetup,  setShowFBSetup]  = useState(false);
   const saveTimer=useRef(), dragCnt=useRef(0), logoRef=useRef();
 
   const toast$=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
 
+  const idxEntry = r => ({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
+
+  /* ── Initial load: local first, then sync from Firebase ── */
   useEffect(()=>{
-    const r=LS.get("sor-index");
-    setIdx(r?JSON.parse(r.value):[]);
-    setDriveStatus(GDrive.isConf()?"disconnected":"unconfigured");
+    const local=JSON.parse(LS.get("sor-index")?.value||"[]");
+    setIdx(local);
     setView("list");
+    if(FB.isConf()) syncFromFirebase();
   },[]);
 
-  /* Save effect — localStorage + Drive */
+  const syncFromFirebase = async () => {
+    setSyncStatus("syncing");
+    try{
+      const remote=await FB.loadAll();
+      // Merge remote into local — last updated wins
+      const map={};
+      const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
+      localIdx.forEach(e=>{const raw=LS.get(`sor-${e.id}`);if(raw)map[e.id]=JSON.parse(raw.value);});
+      remote.forEach(r=>{if(!map[r.id]||r.updated>map[r.id].updated)map[r.id]=r;});
+      // Upload any local-only or newer-local reports
+      for(const r of Object.values(map)){
+        LS.set(`sor-${r.id}`,JSON.stringify(r));
+        const inRemote=remote.find(x=>x.id===r.id);
+        if(!inRemote||r.updated>inRemote.updated) await FB.save(r);
+      }
+      const newIdx=Object.values(map).map(idxEntry);
+      LS.set("sor-index",JSON.stringify(newIdx));
+      setIdx(newIdx);
+      setSyncStatus("synced");
+    }catch(e){
+      console.error("Firebase sync:",e);
+      setSyncStatus("error");
+      toast$("Sync failed — working offline");
+    }
+  };
+
+  /* ── Auto-save: local + Firebase ── */
   useEffect(()=>{
     if(!report) return;
     setSaveStatus("saving");
@@ -579,64 +539,23 @@ function App(){
         const up={...report,updated:Date.now()};
         LS.set(`sor-${report.id}`,JSON.stringify(up));
         setIdx(prev=>{
-          const entry={id:report.id,project:report.project,address:report.address,reportNo:report.reportNo,issues:report.issues.length,flagged:report.issues.filter(i=>isFlagged(i.type)).length,updated:up.updated};
-          const i=prev.findIndex(r=>r.id===report.id);
+          const entry=idxEntry(up);
+          const i=prev.findIndex(r=>r.id===up.id);
           const next=i>=0?prev.map((r,j)=>j===i?entry:r):[...prev,entry];
-          LS.set("sor-index",JSON.stringify(next));return next;
+          LS.set("sor-index",JSON.stringify(next));
+          return next;
         });
         setSaveStatus("saved");
-        if(GDrive.isAuth()){
-          setDriveStatus("syncing");
-          try{ await GDrive.save(up); setDriveStatus("connected"); }
-          catch(e){ console.error("Drive save:",e); setDriveStatus("error"); }
+        if(FB.isConf()){
+          setSyncStatus("syncing");
+          try{await FB.save(up);setSyncStatus("synced");}
+          catch{setSyncStatus("error");}
         }
-      }catch{ setSaveStatus("error"); }
+      }catch{setSaveStatus("error");}
     },800);
   },[report]);
 
-  const syncWithDrive = async () => {
-    setDriveStatus("signing-in");
-    try{
-      await GDrive.signIn();
-      setDriveStatus("syncing");
-      const driveReports=await GDrive.loadAll();
-      // Merge: last updated wins
-      const merged={};
-      const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
-      localIdx.forEach(entry=>{
-        const raw=LS.get(`sor-${entry.id}`);
-        if(raw) merged[entry.id]=JSON.parse(raw.value);
-      });
-      driveReports.forEach(dr=>{
-        if(!merged[dr.id]||dr.updated>merged[dr.id].updated) merged[dr.id]=dr;
-      });
-      // Persist merged set
-      const newIdx=[];
-      for(const r of Object.values(merged)){
-        LS.set(`sor-${r.id}`,JSON.stringify(r));
-        newIdx.push({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
-        // Upload local-only or newer-local reports to Drive
-        const inDrive=driveReports.find(d=>d.id===r.id);
-        if(!inDrive||r.updated>inDrive.updated) await GDrive.save(r);
-      }
-      LS.set("sor-index",JSON.stringify(newIdx));
-      setIdx(newIdx);
-      setDriveStatus("connected");
-      toast$(`Drive connected — ${newIdx.length} report${newIdx.length!==1?"s":""} synced ✓`);
-    }catch(e){
-      console.error("Drive sync:",e);
-      setDriveStatus(GDrive.isConf()?"error":"unconfigured");
-      if(e==="gis-unavailable") toast$("Google sign-in unavailable. Check your connection.");
-      else if(e!=="no-client-id") toast$("Drive connection failed. Try again.");
-    }
-  };
-
-  const handleDriveClick=()=>{
-    if(!GDrive.isConf()) setShowDriveSetup(true);
-    else syncWithDrive();
-  };
-
-  const openReport=id=>{const r=LS.get(`sor-${id}`);if(r){setReport(JSON.parse(r.value));setView("report");}else toast$("Report not found");};
+  const openReport = id=>{const r=LS.get(`sor-${id}`);if(r){setReport(JSON.parse(r.value));setView("report");}else toast$("Report not found");};
   const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
   const doAutoFill=selId=>{
     setAutoFillIdx(null);
@@ -645,10 +564,10 @@ function App(){
     else setReport(blankReport());
     setView("report");
   };
-  const deleteReport=async id=>{
+  const deleteReport = async id => {
     LS.del(`sor-${id}`);
-    setIdx(prev=>{const n=prev.filter(r=>r.id!==id);LS.set("sor-index",JSON.stringify(n));return n;});
-    if(GDrive.isAuth()) try{await GDrive.del(id);}catch{}
+    setIdx(prev => { const n=prev.filter(r=>r.id!==id); LS.set("sor-index",JSON.stringify(n)); return n; });
+    if(FB.isConf()) try { await FB.archive(id); } catch {}
   };
 
   const setR=u=>setReport(p=>typeof u==="function"?u(p):{...p,...u});
@@ -693,8 +612,8 @@ function App(){
 
   if(view==="list") return (
     <div className="min-h-screen bg-slate-50">
-      {showDriveSetup&&<DriveSetupModal onClose={proceed=>{setShowDriveSetup(false);if(proceed)syncWithDrive();}}/>}
-      <div className="bg-white border-b border-gray-200 no-print">
+      {showFBSetup&&<FirebaseSetupModal onClose={proceed=>{setShowFBSetup(false);if(proceed)syncFromFirebase();}}/>}
+      <div className="bg-white border-b border-gray-200">
         <div style={{maxWidth:"44rem",margin:"0 auto",padding:"0 1rem"}}>
           <div className="flex items-center gap-3 py-3">
             <div className="bg-gray-800 text-white rounded-xl flex items-center justify-center font-bold text-lg flex-shrink-0" style={{width:"2.25rem",height:"2.25rem"}}>📋</div>
@@ -702,8 +621,11 @@ function App(){
           </div>
         </div>
       </div>
-      {toast&&<div className="fixed top-4 left-1/2 z-50 bg-gray-900 text-white text-sm font-medium px-5 py-2.5 rounded-full shadow-lg pointer-events-none" style={{transform:"translateX(-50%)",zIndex:100}}>{toast}</div>}
-      <ReportsList index={idx} onOpen={openReport} onCreate={createReport} onDelete={deleteReport} driveStatus={driveStatus} onDriveClick={handleDriveClick}/>
+      {toast&&<div className="fixed top-4 left-1/2 z-50 bg-gray-900 text-white text-sm font-medium px-5 py-2.5 rounded-full shadow-lg pointer-events-none" style={{transform:"translateX(-50%)"}}>{toast}</div>}
+      <ReportsList index={idx} onOpen={openReport} onCreate={createReport} onDelete={deleteReport}
+        syncStatus={syncStatus}
+        onSyncClick={()=>FB.isConf()?syncFromFirebase():setShowFBSetup(true)}
+        onRefresh={syncFromFirebase}/>
     </div>
   );
 
@@ -728,13 +650,6 @@ function App(){
     const VAL={fontSize:"0.82rem",color:"#1f2937"};
     const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
     const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"0.8rem"};
-
-    const driveDot=()=>{
-      if(driveStatus==="connected") return <><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"/><span className="text-green-600">Drive synced</span></>;
-      if(driveStatus==="syncing")   return <><span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"/><span className="text-blue-500">Syncing…</span></>;
-      if(driveStatus==="error")     return <><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400"/><span className="text-red-500">Drive error</span></>;
-      return null;
-    };
 
     return (
       <div className="min-h-screen bg-slate-50"
@@ -763,7 +678,9 @@ function App(){
                   {saveStatus==="saving"&&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse"/><span className="text-yellow-500">Saving…</span></>}
                   {saveStatus==="saved" &&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"/><span className="text-gray-400">Saved</span></>}
                   {saveStatus==="error" &&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400"/><span className="text-red-400">Save error</span></>}
-                  {driveDot()&&<><span className="text-gray-200">·</span>{driveDot()}</>}
+                  {syncStatus==="syncing"&&<><span className="text-gray-200">·</span><span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"/><span className="text-blue-500">Syncing…</span></>}
+                  {syncStatus==="synced" &&<><span className="text-gray-200">·</span><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"/><span className="text-green-600">Synced</span></>}
+                  {syncStatus==="error"  &&<><span className="text-gray-200">·</span><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400"/><span className="text-red-500">Sync error</span></>}
                   <span className="text-gray-300">·</span>
                   <span className="text-gray-400">{R.issues.length} observation{R.issues.length!==1?"s":""}</span>
                   {flagCount>0&&<span style={{background:"#fee2e2",color:"#dc2626",fontSize:"0.65rem",fontWeight:700,padding:"0.1rem 0.5rem",borderRadius:"999px"}}>{flagCount} flagged</span>}
@@ -776,11 +693,9 @@ function App(){
         </div>
 
         <div style={{maxWidth:"64rem",margin:"0 auto",padding:"1.5rem 1rem"}}>
-
           {/* ── Report Header ── */}
           <div className="bg-white shadow-sm" style={{border:"1px solid #d1d5db",marginBottom:"1.25rem"}}>
-
-            {/* PRINT header */}
+            {/* PRINT */}
             <div className="print-show">
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"1.2rem 1.5rem 0.9rem",borderBottom:"1.5px solid #111827"}}>
                 <div style={{flexShrink:0}}>{R.logo?<img src={R.logo} alt="Logo" style={{maxHeight:"3rem",maxWidth:"10rem",objectFit:"contain"}}/>:<div style={{width:"8rem"}}/>}</div>
@@ -804,8 +719,7 @@ function App(){
               </div>
               <div style={{padding:"0.4rem 1.5rem 0.7rem"}}><p style={{fontSize:"0.6rem",color:"#9ca3af",lineHeight:1.65,fontStyle:"italic",margin:0}}>{DISCLAIMER}</p></div>
             </div>
-
-            {/* SCREEN form */}
+            {/* SCREEN */}
             <div className="no-print p-5 space-y-4">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Report Header</p>
               <div className="flex items-start gap-4">
