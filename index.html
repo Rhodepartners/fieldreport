@@ -17,8 +17,9 @@
     .no-print { display:none !important; }
     .print-show { display:block !important; } .print-only { display:inline !important; }
     body { background:white; }
-    .print-card { break-inside:avoid; page-break-inside:avoid; orphans:3; widows:3; }
+    .print-card { break-inside:avoid; page-break-inside:avoid; orphans:3; widows:3; background:white !important; }
     .print-section { break-inside:avoid; page-break-inside:avoid; }
+    div, section, header { background:white !important; border-color:#d1d5db !important; }
   }
   @page { margin:1in; size:letter portrait; }
 </style>
@@ -699,7 +700,7 @@ function App(){
             {/* PRINT */}
             <div className="print-show">
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"1.2rem 1.5rem 0.9rem",borderBottom:"1.5px solid #111827"}}>
-                <div style={{flexShrink:0}}>{R.logo?<img src={R.logo} alt="Logo" style={{maxHeight:"3rem",maxWidth:"10rem",objectFit:"contain"}}/>:<div style={{width:"8rem"}}/>}</div>
+                <div style={{flexShrink:0}}><img src={R.logo||LOGO_SVG} alt="Logo" style={{maxHeight:"3rem",maxWidth:"10rem",objectFit:"contain"}}/></div>
                 <div style={{textAlign:"right"}}>
                   <p style={{fontSize:"0.55rem",fontWeight:700,letterSpacing:"0.18em",textTransform:"uppercase",color:"#9ca3af",margin:"0 0 0.1rem"}}>Site Observation Report</p>
                   <p style={{fontSize:"1.1rem",fontWeight:700,color:"#111827",margin:"0 0 0.05rem",lineHeight:1.2}}>{R.project||"—"}</p>
@@ -725,12 +726,7 @@ function App(){
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Report Header</p>
               <div className="flex items-start gap-4">
                 <div className="flex-shrink-0">
-                  {R.logo
-                    ?<div className="relative group"><img src={R.logo} alt="Logo" style={{height:"3.5rem",maxWidth:"10rem",objectFit:"contain",border:"1px solid #e5e7eb",borderRadius:"0.5rem"}}/>
-                      <button onClick={()=>setR({logo:""})} className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 text-xs items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style={{display:"flex"}}>✕</button></div>
-                    :<button onClick={()=>logoRef.current.click()} className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 hover:border-gray-400 text-gray-400 hover:text-gray-600 transition-colors" style={{width:"8rem",height:"3.5rem",fontSize:"0.7rem",fontWeight:600,borderRadius:"0.5rem"}}>
-                      <span style={{fontSize:"1.2rem"}}>🏢</span>Upload Logo</button>}
-                  <input ref={logoRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleLogoUpload}/>
+                  <img src={LOGO_SVG} alt="Rhode Partners" style={{height:"3rem",maxWidth:"10rem",objectFit:"contain"}}/>
                 </div>
                 <div className="flex-1 space-y-2">
                   <input className="w-full text-xl font-bold text-gray-900 border-b-2 border-gray-100 focus:border-gray-400 focus:outline-none pb-1 bg-transparent" value={R.project} onChange={e=>setR({project:e.target.value})} placeholder="Project Name"/>
