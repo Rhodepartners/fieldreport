@@ -19,7 +19,8 @@
     body { background:white; }
     .print-card { break-inside:avoid; page-break-inside:avoid; orphans:3; widows:3; background:white !important; }
     .print-section { break-inside:avoid; page-break-inside:avoid; }
-    div, section, header { background:white !important; border-color:#d1d5db !important; }
+    * { background:white !important; background-color:white !important; }
+    .photo-label { background:rgba(0,0,0,0.55) !important; color:white !important; }
   }
   @page { margin:1in; size:letter portrait; }
 </style>
@@ -29,45 +30,32 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-/* ── Local Storage ─────────────────────────────────────────────────── */
 const LS = {
   get: k     => { try{const v=localStorage.getItem(k);return v?{value:v}:null;}catch{return null;} },
   set: (k,v) => { try{localStorage.setItem(k,v);}catch{} },
   del: k     => { try{localStorage.removeItem(k);}catch{} }
 };
 
-/* ── Firebase Realtime Database Module ────────────────────────────── */
 const FB = (() => {
-  // Hardcode your Firebase Database URL here once you have it:
   const HARDCODED_URL = "https://rhode-field-reports-default-rtdb.firebaseio.com";
-
-  const dbUrl = () => HARDCODED_URL || localStorage.getItem("sor-fburl") || "";
+  const dbUrl  = () => HARDCODED_URL || localStorage.getItem("sor-fburl") || "";
   const isConf = () => !!dbUrl();
   const setUrl = u => localStorage.setItem("sor-fburl", u.replace(/\/$/, ""));
-
   const req = async (method, path, body) => {
     const url = `${dbUrl()}${path}.json`;
-    const opts = { method, headers: {"Content-Type":"application/json"} };
-    if (body !== undefined) opts.body = JSON.stringify(body);
-    const r = await fetch(url, opts);
-    if (!r.ok) throw new Error(`Firebase ${r.status}`);
-    return method === "DELETE" ? null : r.json();
+    const opts = { method, headers:{"Content-Type":"application/json"} };
+    if(body!==undefined) opts.body=JSON.stringify(body);
+    const r=await fetch(url,opts);
+    if(!r.ok) throw new Error(`Firebase ${r.status}`);
+    return method==="DELETE"?null:r.json();
   };
-
-  const loadAll = async () => {
-    const data = await req("GET", "/reports");
-    if (!data) return [];
-    return Object.values(data).filter(r => r && !r.archived);
-  };
-
-  const save    = async report => req("PUT", `/reports/${report.id}`, report);
-  const archive = async id     => req("PATCH", `/reports/${id}`, {archived: true});
-  const del  = archive; // alias — we never hard-delete from Firebase
-
+  const loadAll = async () => { const d=await req("GET","/reports"); if(!d) return []; return Object.values(d).filter(r=>r&&!r.archived); };
+  const save    = async report => req("PUT",`/reports/${report.id}`,report);
+  const archive = async id     => req("PATCH",`/reports/${id}`,{archived:true});
+  const del = archive;
   return { isConf, dbUrl, setUrl, loadAll, save, del };
 })();
 
-/* ── Constants ─────────────────────────────────────────────────────── */
 const DISCLAIMER  = "This report is considered to be a factual representation of site observation/meeting field notes. Attendees and recipients are requested to advise the undersigned of any corrections or questions within five business days following receipt, otherwise it will be understood the report is accepted as written.";
 const ISSUE_TYPES = ["General Observation","Defect Noted","Issue Noted"];
 const DEFAULT_LOCS= ["Basement / B1","Level 1","Level 2","Level 3","Roof","Exterior","Site"];
@@ -107,14 +95,12 @@ const compressImage = (src, cb) => {
   img.src=src;
 };
 
-/* ── AutoTA ────────────────────────────────────────────────────────── */
 function AutoTA({value,onChange,placeholder,style,className}){
   const ref=useRef();
   useEffect(()=>{if(!ref.current)return;ref.current.style.height="auto";ref.current.style.height=ref.current.scrollHeight+"px";},[value]);
   return <textarea ref={ref} value={value} onChange={onChange} placeholder={placeholder} className={className} style={{...style,resize:"none",overflow:"hidden"}}/>;
 }
 
-/* ── Annotation Modal ──────────────────────────────────────────────── */
 function AnnotationModal({photo,onSave,onClose}){
   const cvs=useRef(),drw=useRef(false),s0=useRef({});
   const [tool,setTool]=useState("arrow"),[color,setColor]=useState("#ef4444"),[sz,setSz]=useState(4),[hist,setHist]=useState([]);
@@ -167,7 +153,6 @@ function AnnotationModal({photo,onSave,onClose}){
   );
 }
 
-/* ── Location Manager ──────────────────────────────────────────────── */
 function LocManager({locs,onChange,onClose}){
   const [list,setList]=useState([...locs]),[inp,setInp]=useState("");
   const add=()=>{const v=inp.trim();if(v&&!list.includes(v)){setList([...list,v]);setInp("");}};
@@ -202,7 +187,6 @@ function LocManager({locs,onChange,onClose}){
   );
 }
 
-/* ── AutoFill Modal ────────────────────────────────────────────────── */
 function AutoFillModal({index,onSelect,onSkip}){
   const sorted=[...index].sort((a,b)=>b.updated-a.updated);
   const [sel,setSel]=useState(sorted[0]?.id||"");
@@ -227,7 +211,6 @@ function AutoFillModal({index,onSelect,onSkip}){
   );
 }
 
-/* ── Firebase Setup Modal ──────────────────────────────────────────── */
 function FirebaseSetupModal({onClose}){
   const [url,setUrl]=useState(FB.dbUrl());
   const [page,setPage]=useState("form");
@@ -275,7 +258,7 @@ function FirebaseSetupModal({onClose}){
           ))}
           <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
             <p className="text-xs text-yellow-800 font-semibold mb-1">⚠ Note on test mode</p>
-            <p className="text-xs text-yellow-700">Test mode rules expire after 30 days by default. After setup, go back to the Rules tab and remove the expiry date from the rules to keep them permanent. Alternatively, once you give me the database URL I can include a reminder in the app.</p>
+            <p className="text-xs text-yellow-700">Test mode rules expire after 30 days by default. After setup, go back to the Rules tab and remove the expiry date from the rules to keep them permanent.</p>
           </div>
         </div>
         <div className="px-5 py-3 border-t border-gray-100 flex-shrink-0">
@@ -315,7 +298,6 @@ function FirebaseSetupModal({onClose}){
   );
 }
 
-/* ── TypeBadge ─────────────────────────────────────────────────────── */
 function TypeBadge({type}){
   const f=isFlagged(type);
   return <span style={{fontSize:"0.68rem",fontWeight:700,padding:"0.15rem 0.55rem",background:"#f3f4f6",color:f?"#dc2626":"#374151",border:"1px solid #d1d5db"}}>{f?"⚠ ":""}{type}</span>;
@@ -346,6 +328,7 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
         </div>
       </div>
       <div style={{padding:"0.65rem 0.85rem"}}>
+        {/* Type selector — screen only */}
         <div className="no-print" style={{display:"flex",alignItems:"center",gap:"1rem",marginBottom:"0.55rem",flexWrap:"wrap"}}>
           <span style={{fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:"#9ca3af",flexShrink:0}}>Type</span>
           {ISSUE_TYPES.map(t=>(
@@ -355,9 +338,9 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
             </label>
           ))}
         </div>
-        <div className="print-show" style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.3rem",flexWrap:"wrap"}}>
+        {/* Type badge — print only (no location; already shown in section header) */}
+        <div className="print-show" style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.3rem"}}>
           <TypeBadge type={f.type}/>
-          {useLocations&&f.loc&&<span style={{fontSize:"0.68rem",color:"#6b7280"}}>📍 {f.loc}</span>}
         </div>
         <AutoTA value={f.desc} onChange={e=>commit({desc:e.target.value})} className="no-print"
           placeholder="Describe the condition, defect, or observation…"
@@ -369,7 +352,8 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
               <div key={ph.id} className="print-section" style={{border:"1px solid #d1d5db",overflow:"hidden",background:"#fff"}}>
                 <div style={{position:"relative",background:"#fff"}}>
                   <img src={ph.src} alt="" style={{width:"100%",display:"block",objectFit:"contain",maxHeight:"280px"}}/>
-                  <div style={{position:"absolute",top:5,left:5,background:"rgba(0,0,0,0.55)",color:"white",fontSize:"0.68rem",fontWeight:700,padding:"0.1rem 0.35rem"}}>{String.fromCharCode(65+pi)}</div>
+                  {/* photo-label class protects this badge from the print * {background:white} override */}
+                  <div className="photo-label" style={{position:"absolute",top:5,left:5,background:"rgba(0,0,0,0.55)",color:"white",fontSize:"0.68rem",fontWeight:700,padding:"0.1rem 0.35rem"}}>{String.fromCharCode(65+pi)}</div>
                   <div className="no-print" style={{position:"absolute",inset:0,display:"flex",alignItems:"flex-end",justifyContent:"flex-end",padding:"0.35rem",gap:"0.2rem",opacity:0,transition:"opacity 0.15s",background:"linear-gradient(to top,rgba(0,0,0,0.45) 0%,transparent 55%)"}}
                     onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>
                     <button onClick={()=>onAnnotate(ph,issue.id)} style={{background:"rgba(0,0,0,0.7)",color:"white",border:"none",padding:"0.25rem 0.55rem",fontSize:"0.7rem",cursor:"pointer"}}>✏️</button>
@@ -381,8 +365,8 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
           </div>
         )}
         <div className="no-print" style={{marginTop:"0.5rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
-          <button onClick={()=>fileRef.current.click()} style={{fontSize:"0.73rem",color:"#374151",border:"1px solid #d1d5db",background:"white",padding:"0.28rem 0.7rem",cursor:"pointer"}}>+ Add Photo(s)</button>
-          <span style={{fontSize:"0.7rem",color:"#d1d5db"}}>or paste ⌘V / Ctrl+V anywhere</span>
+          <button onClick={()=>fileRef.current.click()} style={{fontSize:"0.73rem",color:"#374151",border:"1px solid #d1d5db",background:"white",padding:"0.28rem 0.7rem",cursor:"pointer"}}>+ Add Photos</button>
+          <span style={{fontSize:"0.7rem",color:"#9ca3af"}}>select multiple at once · paste ⌘V · drag & drop</span>
           <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
         </div>
       </div>
@@ -390,7 +374,6 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
   );
 }
 
-/* ── PartyField ────────────────────────────────────────────────────── */
 function PartyField({label,nameKey,addrKey,R,setR}){
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -403,7 +386,6 @@ function PartyField({label,nameKey,addrKey,R,setR}){
   );
 }
 
-/* ── Reports List ──────────────────────────────────────────────────── */
 function ReportsList({index,onOpen,onCreate,onDelete,syncStatus,onSyncClick,onRefresh}){
   const sorted=[...index].sort((a,b)=>b.updated-a.updated);
   const groups={};
@@ -411,14 +393,12 @@ function ReportsList({index,onOpen,onCreate,onDelete,syncStatus,onSyncClick,onRe
   const names=Object.keys(groups);
   const [collapsed,setCollapsed]=useState({});
   const toggle=n=>setCollapsed(p=>({...p,[n]:!p[n]}));
-
   const syncBtn=()=>{
     if(syncStatus==="synced")   return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 border border-green-200 text-xs font-medium text-green-700 cursor-pointer hover:bg-green-100" onClick={onRefresh}><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>Synced · Refresh</div>;
     if(syncStatus==="syncing")  return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block"/>Syncing…</div>;
     if(syncStatus==="error")    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-xs font-medium text-red-600 hover:bg-red-100"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>Sync Error · Retry</button>;
     return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:border-gray-400 transition-all">☁ Connect Shared Library</button>;
   };
-
   return (
     <div style={{maxWidth:"44rem",margin:"0 auto",padding:"2.5rem 1rem"}}>
       <div className="flex items-center justify-between mb-6">
@@ -480,41 +460,36 @@ function ReportsList({index,onOpen,onCreate,onDelete,syncStatus,onSyncClick,onRe
 
 /* ── App ───────────────────────────────────────────────────────────── */
 function App(){
-  const [view,         setView]         = useState("loading");
-  const [idx,          setIdx]          = useState([]);
-  const [report,       setReport]       = useState(null);
-  const [annotCtx,     setAnnotCtx]     = useState(null);
-  const [toast,        setToast]        = useState(null);
-  const [dropping,     setDropping]     = useState(false);
-  const [saveStatus,   setSaveStatus]   = useState("saved");
-  const [autoFillIdx,  setAutoFillIdx]  = useState(null);
-  const [showLocs,     setShowLocs]     = useState(false);
-  const [syncStatus,   setSyncStatus]   = useState("idle"); // idle|syncing|synced|error
-  const [showFBSetup,  setShowFBSetup]  = useState(false);
-  const saveTimer=useRef(), dragCnt=useRef(0), logoRef=useRef();
+  const [view,setView]=useState("loading");
+  const [idx,setIdx]=useState([]);
+  const [report,setReport]=useState(null);
+  const [annotCtx,setAnnotCtx]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [dropping,setDropping]=useState(false);
+  const [saveStatus,setSaveStatus]=useState("saved");
+  const [autoFillIdx,setAutoFillIdx]=useState(null);
+  const [showLocs,setShowLocs]=useState(false);
+  const [syncStatus,setSyncStatus]=useState("idle");
+  const [showFBSetup,setShowFBSetup]=useState(false);
+  const saveTimer=useRef(),dragCnt=useRef(0);
 
   const toast$=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
+  const idxEntry=r=>({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
 
-  const idxEntry = r => ({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
-
-  /* ── Initial load: local first, then sync from Firebase ── */
   useEffect(()=>{
     const local=JSON.parse(LS.get("sor-index")?.value||"[]");
-    setIdx(local);
-    setView("list");
+    setIdx(local);setView("list");
     if(FB.isConf()) syncFromFirebase();
   },[]);
 
-  const syncFromFirebase = async () => {
+  const syncFromFirebase=async()=>{
     setSyncStatus("syncing");
     try{
       const remote=await FB.loadAll();
-      // Merge remote into local — last updated wins
       const map={};
       const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
       localIdx.forEach(e=>{const raw=LS.get(`sor-${e.id}`);if(raw)map[e.id]=JSON.parse(raw.value);});
       remote.forEach(r=>{if(!map[r.id]||r.updated>map[r.id].updated)map[r.id]=r;});
-      // Upload any local-only or newer-local reports
       for(const r of Object.values(map)){
         LS.set(`sor-${r.id}`,JSON.stringify(r));
         const inRemote=remote.find(x=>x.id===r.id);
@@ -522,21 +497,15 @@ function App(){
       }
       const newIdx=Object.values(map).map(idxEntry);
       LS.set("sor-index",JSON.stringify(newIdx));
-      setIdx(newIdx);
-      setSyncStatus("synced");
-    }catch(e){
-      console.error("Firebase sync:",e);
-      setSyncStatus("error");
-      toast$("Sync failed — working offline");
-    }
+      setIdx(newIdx);setSyncStatus("synced");
+    }catch(e){console.error("Firebase sync:",e);setSyncStatus("error");toast$("Sync failed — working offline");}
   };
 
-  /* ── Auto-save: local + Firebase ── */
   useEffect(()=>{
     if(!report) return;
     setSaveStatus("saving");
     clearTimeout(saveTimer.current);
-    saveTimer.current=setTimeout(async ()=>{
+    saveTimer.current=setTimeout(async()=>{
       try{
         const up={...report,updated:Date.now()};
         LS.set(`sor-${report.id}`,JSON.stringify(up));
@@ -544,20 +513,15 @@ function App(){
           const entry=idxEntry(up);
           const i=prev.findIndex(r=>r.id===up.id);
           const next=i>=0?prev.map((r,j)=>j===i?entry:r):[...prev,entry];
-          LS.set("sor-index",JSON.stringify(next));
-          return next;
+          LS.set("sor-index",JSON.stringify(next));return next;
         });
         setSaveStatus("saved");
-        if(FB.isConf()){
-          setSyncStatus("syncing");
-          try{await FB.save(up);setSyncStatus("synced");}
-          catch{setSyncStatus("error");}
-        }
+        if(FB.isConf()){setSyncStatus("syncing");try{await FB.save(up);setSyncStatus("synced");}catch{setSyncStatus("error");}}
       }catch{setSaveStatus("error");}
     },800);
   },[report]);
 
-  const openReport = id=>{const r=LS.get(`sor-${id}`);if(r){setReport(JSON.parse(r.value));setView("report");}else toast$("Report not found");};
+  const openReport=id=>{const r=LS.get(`sor-${id}`);if(r){setReport(JSON.parse(r.value));setView("report");}else toast$("Report not found");};
   const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
   const doAutoFill=selId=>{
     setAutoFillIdx(null);
@@ -566,10 +530,10 @@ function App(){
     else setReport(blankReport());
     setView("report");
   };
-  const deleteReport = async id => {
+  const deleteReport=async id=>{
     LS.del(`sor-${id}`);
-    setIdx(prev => { const n=prev.filter(r=>r.id!==id); LS.set("sor-index",JSON.stringify(n)); return n; });
-    if(FB.isConf()) try { await FB.archive(id); } catch {}
+    setIdx(prev=>{const n=prev.filter(r=>r.id!==id);LS.set("sor-index",JSON.stringify(n));return n;});
+    if(FB.isConf()) try{await FB.archive(id);}catch{}
   };
 
   const setR=u=>setReport(p=>typeof u==="function"?u(p):{...p,...u});
@@ -577,7 +541,6 @@ function App(){
   const deleteIssue=id=>setR(p=>({...p,issues:p.issues.filter(i=>i.id!==id)}));
   const moveIssue=(id,d)=>setR(p=>{const a=[...p.issues],i=a.findIndex(x=>x.id===id),j=i+d;if(j<0||j>=a.length)return p;[a[i],a[j]]=[a[j],a[i]];return{...p,issues:a};});
   const addIssue=()=>setR(p=>({...p,issues:[...p.issues,blankIssue()]}));
-  const handleLogoUpload=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setR({logo:ev.target.result});r.readAsDataURL(f);};
 
   useEffect(()=>{
     const fn=e=>{
@@ -640,17 +603,29 @@ function App(){
       const locOrder=[],locMap={};
       R.issues.forEach(iss=>{if(iss.loc&&!locMap.hasOwnProperty(iss.loc)){locMap[iss.loc]=locOrder.length+1;locOrder.push(iss.loc);}});
       const lsc={};
-      displayNums=R.issues.map(iss=>{if(!iss.loc)return"—";const maj=locMap[iss.loc];lsc[iss.loc]=(lsc[iss.loc]||0)+1;return`${maj}.${lsc[iss.loc]}`;});
+      // e.g. Report 10, Location 1, Observation 3 → "10.1.3"
+      displayNums=R.issues.map(iss=>{
+        if(!iss.loc) return "—";
+        const maj=locMap[iss.loc];
+        lsc[iss.loc]=(lsc[iss.loc]||0)+1;
+        return `${R.reportNo}.${maj}.${lsc[iss.loc]}`;
+      });
       const gbL={};
-      R.issues.forEach((iss,fi)=>{const k=iss.loc||"";if(!gbL[k]){gbL[k]={loc:iss.loc||"",locNum:iss.loc?locMap[iss.loc]:null,items:[]};groups.push(gbL[k]);}gbL[k].items.push({iss,flatIdx:fi,displayNum:displayNums[fi]});});
+      R.issues.forEach((iss,fi)=>{
+        const k=iss.loc||"";
+        if(!gbL[k]){gbL[k]={loc:iss.loc||"",locNum:iss.loc?locMap[iss.loc]:null,items:[]};groups.push(gbL[k]);}
+        gbL[k].items.push({iss,flatIdx:fi,displayNum:displayNums[fi]});
+      });
     } else {
-      displayNums=R.issues.map((_,i)=>String(i+1));
-      groups=[{loc:"",locNum:null,items:R.issues.map((iss,fi)=>({iss,flatIdx:fi,displayNum:String(fi+1)}))}];
+      // No locations: "10.1", "10.2", …
+      displayNums=R.issues.map((_,i)=>`${R.reportNo}.${i+1}`);
+      groups=[{loc:"",locNum:null,items:R.issues.map((iss,fi)=>({iss,flatIdx:fi,displayNum:displayNums[fi]}))}];
     }
 
     const LBL={fontSize:"0.6rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:"#9ca3af",display:"block",marginBottom:"0.1rem"};
     const VAL={fontSize:"0.82rem",color:"#1f2937"};
     const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
+    // Location section header: "10.1 Level 1"
     const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"0.8rem"};
 
     return (
@@ -778,7 +753,8 @@ function App(){
             )}
             {groups.map(group=>(
               <div key={group.loc||"__none__"}>
-                {R.useLocations&&group.loc&&<div style={LOC_HDR}>{group.locNum}. {group.loc}</div>}
+                {/* Location section header: "10.1 Level 1" */}
+                {R.useLocations&&group.loc&&<div style={LOC_HDR}>{R.reportNo}.{group.locNum} {group.loc}</div>}
                 {R.useLocations&&!group.loc&&group.items.length>0&&<div style={{...LOC_HDR,color:"#9ca3af",fontStyle:"italic"}}>No Location Assigned</div>}
                 {group.items.map(({iss,flatIdx,displayNum})=>(
                   <IssueCard key={iss.id} issue={iss} displayNum={displayNum} flatIdx={flatIdx} total={R.issues.length}
