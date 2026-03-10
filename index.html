@@ -702,7 +702,6 @@ function App(){
     const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
     // Location section header: "10.1 Level 1"
     const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"1.5rem"};
-    const LOC_HDR_BREAK={...LOC_HDR,breakBefore:"page",pageBreakBefore:"always"};
 
     return (
       <div className="min-h-screen bg-slate-50"
@@ -751,7 +750,15 @@ function App(){
             {/* PRINT */}
             <div className="print-show">
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"1.2rem 1.5rem 0.9rem",borderBottom:"1.5px solid #111827"}}>
-                <div style={{flexShrink:0}}><LogoSVG/></div>
+                <div style={{flexShrink:0}}>
+                  {R.logo && R.logo !== LOGO_SVG
+                    ? <img src={R.logo} alt="Logo" style={{maxHeight:"3rem",maxWidth:"10rem",objectFit:"contain"}}/>
+                    : <div style={{fontFamily:"Arial,Helvetica,sans-serif",fontSize:"1.6rem",fontWeight:300,letterSpacing:"0.09em",lineHeight:1}}>
+                        <span style={{color:"#2b2b2b"}}>RHODE</span>
+                        <span style={{color:"#1b3c6e"}}> : PARTNERS</span>
+                      </div>
+                  }
+                </div>
                 <div style={{textAlign:"right"}}>
                   <p style={{fontSize:"0.55rem",fontWeight:700,letterSpacing:"0.18em",textTransform:"uppercase",color:"#9ca3af",margin:"0 0 0.1rem"}}>Site Observation Report</p>
                   <p style={{fontSize:"1.1rem",fontWeight:700,color:"#111827",margin:"0 0 0.05rem",lineHeight:1.2}}>{R.project||"—"}</p>
