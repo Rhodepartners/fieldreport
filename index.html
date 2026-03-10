@@ -475,6 +475,18 @@ function App(){
   const saveTimer=useRef(),dragCnt=useRef(0);
 
   const toast$=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
+
+  // Inject dynamic @page footer whenever report changes
+  useEffect(()=>{
+    let el=document.getElementById('sor-page-style');
+    if(!el){el=document.createElement('style');el.id='sor-page-style';document.head.appendChild(el);}
+    if(report){
+      const left=`${report.project||'Untitled'}: Field Report #${report.reportNo}`.replace(/"/g,"'");
+      el.textContent=`@page{margin:1in 1in 1.35in 1in;size:letter portrait;}@page{@bottom-left{content:"${left}";font-size:7.5pt;color:#9ca3af;font-family:Arial,sans-serif;}@bottom-right{content:"Page " counter(page) " of " counter(pages);font-size:7.5pt;color:#9ca3af;font-family:Arial,sans-serif;}}`;
+    }else{
+      el.textContent=`@page{margin:1in;size:letter portrait;}`;
+    }
+  },[report]);
   const idxEntry=r=>({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
 
   // Firebase-first load with 5s timeout fallback to local
@@ -681,7 +693,8 @@ function App(){
     const VAL={fontSize:"0.82rem",color:"#1f2937"};
     const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
     // Location section header: "10.1 Level 1"
-    const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"1.5rem",breakBefore:"page",pageBreakBefore:"always"};
+    const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"1.5rem"};
+    const LOC_HDR_BREAK={...LOC_HDR,breakBefore:"page",pageBreakBefore:"always"};
 
     return (
       <div className="min-h-screen bg-slate-50"
