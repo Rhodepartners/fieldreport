@@ -37,6 +37,7 @@ const LS = {
 };
 
 const FB = (() => {
+  // ⚠️ PASTE YOUR FIREBASE URL HERE BEFORE UPLOADING TO GITHUB:
   const HARDCODED_URL = "https://rhode-field-reports-default-rtdb.firebaseio.com";
   const dbUrl  = () => HARDCODED_URL || localStorage.getItem("sor-fburl") || "";
   const isConf = () => !!dbUrl();
@@ -490,13 +491,15 @@ function App(){
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),5000))
         ]);
         const map={};
+        // Firebase always wins on startup — write all remote reports to localStorage
+        remote.forEach(r=>{map[r.id]=r;LS.set(`sor-${r.id}`,JSON.stringify(r));});
+        // Only push local reports that don't exist in Firebase at all
         const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
-        localIdx.forEach(e=>{const raw=LS.get(`sor-${e.id}`);if(raw)map[e.id]=JSON.parse(raw.value);});
-        remote.forEach(r=>{if(!map[r.id]||r.updated>map[r.id].updated)map[r.id]=r;});
-        for(const r of Object.values(map)){
-          LS.set(`sor-${r.id}`,JSON.stringify(r));
-          const inRemote=remote.find(x=>x.id===r.id);
-          if(!inRemote||r.updated>inRemote.updated) await FB.save(r);
+        for(const e of localIdx){
+          if(!map[e.id]){
+            const raw=LS.get(`sor-${e.id}`);
+            if(raw){const r=JSON.parse(raw.value);map[r.id]=r;await FB.save(r);}
+          }
         }
         const newIdx=Object.values(map).map(idxEntry);
         LS.set("sor-index",JSON.stringify(newIdx));
