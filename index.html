@@ -476,10 +476,48 @@ function App(){
   const toast$=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
   const idxEntry=r=>({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
 
+  // Firebase-first load with 5s timeout fallback to local
   useEffect(()=>{
-    const local=JSON.parse(LS.get("sor-index")?.value||"[]");
-    setIdx(local);setView("list");
-    if(FB.isConf()) syncFromFirebase();
+    const init=async()=>{
+      if(!FB.isConf()){
+        setIdx(JSON.parse(LS.get("sor-index")?.value||"[]"));
+        setView("list");return;
+      }
+      setSyncStatus("syncing");
+      try{
+        const remote=await Promise.race([
+          FB.loadAll(),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),5000))
+        ]);
+        const map={};
+        const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
+        localIdx.forEach(e=>{const raw=LS.get(`sor-${e.id}`);if(raw)map[e.id]=JSON.parse(raw.value);});
+        remote.forEach(r=>{if(!map[r.id]||r.updated>map[r.id].updated)map[r.id]=r;});
+        for(const r of Object.values(map)){
+          LS.set(`sor-${r.id}`,JSON.stringify(r));
+          const inRemote=remote.find(x=>x.id===r.id);
+          if(!inRemote||r.updated>inRemote.updated) await FB.save(r);
+        }
+        const newIdx=Object.values(map).map(idxEntry);
+        LS.set("sor-index",JSON.stringify(newIdx));
+        setIdx(newIdx);setSyncStatus("synced");
+      }catch(e){
+        const local=JSON.parse(LS.get("sor-index")?.value||"[]");
+        setIdx(local);setSyncStatus("error");
+        toast$(e.message==="timeout"?"Server unreachable — showing local data":"Sync failed — showing local data");
+      }
+      setView("list");
+    };
+    init();
+  },[]);
+
+  // Auto-sync to Firebase when connectivity is restored
+  useEffect(()=>{
+    const handleOnline=()=>{
+      if(FB.isConf()){toast$("Connection restored — syncing…");syncFromFirebase();}
+    };
+    window.addEventListener("online",handleOnline);
+    return()=>window.removeEventListener("online",handleOnline);
   },[]);
 
   const syncFromFirebase=async()=>{
@@ -640,7 +678,7 @@ function App(){
     const VAL={fontSize:"0.82rem",color:"#1f2937"};
     const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
     // Location section header: "10.1 Level 1"
-    const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"0.8rem"};
+    const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"1.5rem",breakBefore:"page",pageBreakBefore:"always"};
 
     return (
       <div className="min-h-screen bg-slate-50"
