@@ -313,7 +313,7 @@ function TypeBadge({type}){
 }
 
 /* ── IssueCard ─────────────────────────────────────────────────────── */
-function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,onDelete,onMoveUp,onMoveDown,onAnnotate}){
+function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,onDelete,onMoveUp,onMoveDown,onAnnotate,locHeader}){
   const [f,setF]=useState({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"});
   const fileRef=useRef();
   useEffect(()=>{setF({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"});},[issue.loc,issue.desc,issue.type]);
@@ -324,6 +324,7 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
   const flagged=isFlagged(f.type);
   return (
     <div className="print-card" style={{border:"1px solid #d1d5db",overflow:"hidden",background:"#fff",marginBottom:"0.4rem"}}>
+      {locHeader&&<div style={{fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0.85rem",borderBottom:"2px solid #d1d5db",marginBottom:0,background:"#fff"}}>{locHeader}</div>}
       <div style={{background:"#f3f4f6",borderBottom:"1px solid #d1d5db",padding:"0.4rem 0.85rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
         <span style={{fontSize:"0.78rem",fontWeight:700,color:flagged?"#dc2626":"#374151",flexShrink:0,minWidth:"2.5rem"}}>{displayNum}</span>
         {useLocations&&<select value={f.loc} onChange={e=>commit({loc:e.target.value})} className="no-print" style={{flex:1,maxWidth:"22rem",border:"1px solid #d1d5db",borderRadius:"0.2rem",padding:"0.2rem 0.45rem",fontSize:"0.78rem",background:"white",color:"#374151"}}>
