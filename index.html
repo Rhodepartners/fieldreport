@@ -53,7 +53,7 @@ const FB = (() => {
   const loadAll = async () => { const d=await req("GET","/reports"); if(!d) return []; return Object.values(d).filter(r=>r&&!r.archived); };
   const save    = async report => req("PUT",`/reports/${report.id}`,report);
   const archive = async id     => req("PATCH",`/reports/${id}`,{archived:true});
-  const del = archive;
+  const del = async id => req("DELETE", `/reports/${id}`);
   return { isConf, dbUrl, setUrl, loadAll, save, del, req };
 })();
 
@@ -609,7 +609,7 @@ function App(){
   const deleteReport=async id=>{
     LS.del(`sor-${id}`);
     setIdx(prev=>{const n=prev.filter(r=>r.id!==id);LS.set("sor-index",JSON.stringify(n));return n;});
-    if(FB.isConf()) try{await FB.archive(id);}catch{}
+    if(FB.isConf()) try{await FB.del(id);}catch{}
   };
 
   const setR=u=>setReport(p=>typeof u==="function"?u(p):{...p,...u});
