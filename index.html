@@ -496,7 +496,7 @@ function App(){
       el.textContent=`@page{margin:1in;size:letter portrait;}`;
     }
   },[report]);
-  const idxEntry=r=>({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:r.issues.length,flagged:r.issues.filter(i=>isFlagged(i.type)).length,updated:r.updated});
+  const idxEntry=r=>({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:(r.issues||[]).length,flagged:(r.issues||[]).filter(i=>isFlagged(i.type)).length,updated:r.updated});
 
   // Firebase-first load with 5s timeout fallback to local
   useEffect(()=>{
