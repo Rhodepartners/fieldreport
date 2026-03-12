@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site Observation Report Builder</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  * { font-family: Arial, Helvetica, sans-serif !important; }
+  body { margin:0; background:#f8fafc; }
+  .print-show { display:none; } .print-only { display:none; }
+  @media print {
+    * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+    .no-print { display:none !important; }
+    .print-show { display:block !important; } .print-only { display:inline !important; }
+    body { background:white; }
+    .print-card { break-inside:avoid; page-break-inside:avoid; orphans:3; widows:3; background:white !important; }
+    .print-section { break-inside:avoid; page-break-inside:avoid; }
+    * { background:white !important; background-color:white !important; }
+    .photo-label { background:rgba(0,0,0,0.55) !important; color:white !important; }
+  }
+  @page { margin:1in; size:letter portrait; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const LS = {
+  get: k     => { try{const v=localStorage.getItem(k);return v?{value:v}:null;}catch{return null;} },
+  set: (k,v) => { try{localStorage.setItem(k,v);}catch{} },
+  del: k     => { try{localStorage.removeItem(k);}catch{} }
+};
+
+const FB = (() => {
+  const HARDCODED_URL = "https://rhode-field-reports-default-rtdb.firebaseio.com";
+  const dbUrl  = () => HARDCODED_URL || localStorage.getItem("sor-fburl") || "";
+  const isConf = () => !!dbUrl();
+  const setUrl = u => localStorage.setItem("sor-fburl", u.replace(/\/$/, ""));
+  const req = async (method, path, body) => {
+    const url = `${dbUrl()}${path}.json`;
+    const opts = { method, headers:{"Content-Type":"application/json"} };
+    if(body!==undefined) opts.body=JSON.stringify(body);
+    const r=await fetch(url,opts);
+    if(!r.ok) throw new Error(`Firebase ${r.status}`);
+    return method==="DELETE"?null:r.json();
+  };
+  const loadAll = async () => { const d=await req("GET","/reports"); if(!d) return []; return Object.values(d).filter(r=>r&&!r.archived); };
+  const save    = async report => req("PUT",`/reports/${report.id}`,report);
+  const archive = async id     => req("PATCH",`/reports/${id}`,{archived:true});
+  const del = async id => req("DELETE", `/reports/${id}`);
+  return { isConf, dbUrl, setUrl, loadAll, save, del, req };
+})();
+
+const DISCLAIMER  = "This report is considered to be a factual representation of site observation/meeting field notes. Attendees and recipients are requested to advise the undersigned of any corrections or questions within five business days following receipt, otherwise it will be understood the report is accepted as written.";
+const ISSUE_TYPES = ["General Observation","Defect Noted","Issue Noted"];
+const DEFAULT_LOCS= ["Basement / B1","Level 1","Level 2","Level 3","Roof","Exterior","Site"];
+const LOGO_SVG = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 112"><text font-family="Arial,Helvetica,sans-serif" font-size="78" font-weight="300" letter-spacing="7" y="84"><tspan fill="#2b2b2b">RHODE</tspan><tspan fill="#1b3c6e"> : PARTNERS</tspan></text></svg>');
+const FIRM_NAME   = "Rhode Partners, Inc.";
+const FIRM_ADDR   = "515 Congress Ave #1600\nAustin, Texas 78701";
+const DIST_LIST   = "Owner · Architect · General Contractor";
+
+const today    = () => new Date().toISOString().split("T")[0];
+const fmtd     = d  => d?new Date(d+"T12:00:00").toLocaleDateString([],{month:"long",day:"numeric",year:"numeric"}):"—";
+const fmtShort = ts => new Date(ts).toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
+const isFlagged = t => t==="Defect Noted"||t==="Issue Noted";
+
+const blankReport = (pre={}) => ({
+  id:Date.now().toString(), reportNo:pre.reportNo!=null?pre.reportNo+1:1,
+  project:pre.project||"", projectNo:pre.projectNo||"", address:pre.address||"",
+  owner:pre.owner||"", ownerAddr:pre.ownerAddr||"",
+  architect:FIRM_NAME, architectAddr:FIRM_ADDR,
+  contractor:pre.contractor||"", contractorAddr:pre.contractorAddr||"",
+  issued:today(), visited:today(),
+  issues:[], logo:pre.logo||LOGO_SVG,
+  useLocations:pre.useLocations!==undefined?pre.useLocations:true,
+  locs:pre.locs?[...pre.locs]:[...DEFAULT_LOCS],
+  created:Date.now(), updated:Date.now()
+});
+const blankIssue = () => ({id:Date.now()+Math.random(),loc:"",desc:"",photos:[],type:"General Observation"});
+const blankPhoto = src => ({id:Date.now()+Math.random(),src,ts:Date.now()});
+
+const compressImage = (src, cb) => {
+  const img=new Image();
+  img.onload=()=>{
+    const MAX=1400; let w=img.naturalWidth,h=img.naturalHeight;
+    if(w>MAX||h>MAX){const r=Math.min(MAX/w,MAX/h);w=Math.round(w*r);h=Math.round(h*r);}
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d").drawImage(img,0,0,w,h); cb(c.toDataURL("image/jpeg",0.75));
+  };
+  img.src=src;
+};
+
+function AutoTA({value,onChange,placeholder,style,className}){
+  const ref=useRef();
+  useEffect(()=>{if(!ref.current)return;ref.current.style.height="auto";ref.current.style.height=ref.current.scrollHeight+"px";},[value]);
+  return <textarea ref={ref} value={value} onChange={onChange} placeholder={placeholder} className={className} style={{...style,resize:"none",overflow:"hidden"}}/>;
+}
+
+function AnnotationModal({photo,onSave,onClose}){
+  const cvs=useRef(),drw=useRef(false),s0=useRef({});
+  const [tool,setTool]=useState("arrow"),[color,setColor]=useState("#ef4444"),[sz,setSz]=useState(4),[hist,setHist]=useState([]);
+  useEffect(()=>{
+    const c=cvs.current,ctx=c.getContext("2d"),img=new Image();
+    img.onload=()=>{const mw=Math.min(740,window.innerWidth-48),mh=window.innerHeight*0.54,r=Math.min(mw/img.naturalWidth,mh/img.naturalHeight);c.width=img.naturalWidth*r;c.height=img.naturalHeight*r;ctx.drawImage(img,0,0,c.width,c.height);setHist([c.toDataURL()]);};
+    img.src=photo.src;
+  },[photo.src]);
+  const gp=(e,c)=>{const rc=c.getBoundingClientRect(),cx=e.touches?e.touches[0].clientX:e.clientX,cy=e.touches?e.touches[0].clientY:e.clientY;return{x:(cx-rc.left)*(c.width/rc.width),y:(cy-rc.top)*(c.height/rc.height)};};
+  const ds=(ctx,s,e)=>{ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=sz;ctx.lineCap="round";ctx.lineJoin="round";
+    if(tool==="arrow"){const dx=e.x-s.x,dy=e.y-s.y,ang=Math.atan2(dy,dx),hl=14+sz*2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();ctx.beginPath();ctx.moveTo(e.x,e.y);ctx.lineTo(e.x-hl*Math.cos(ang-Math.PI/6),e.y-hl*Math.sin(ang-Math.PI/6));ctx.lineTo(e.x-hl*Math.cos(ang+Math.PI/6),e.y-hl*Math.sin(ang+Math.PI/6));ctx.closePath();ctx.fill();}
+    else if(tool==="rect"){ctx.strokeRect(s.x,s.y,e.x-s.x,e.y-s.y);}
+  };
+  const onDown=e=>{e.preventDefault();drw.current=true;s0.current=gp(e,cvs.current);};
+  const onMove=e=>{e.preventDefault();if(!drw.current)return;const c=cvs.current,ctx=c.getContext("2d"),p=gp(e,c);const img=new Image();img.onload=()=>{ctx.drawImage(img,0,0);ds(ctx,s0.current,p);};img.src=hist[hist.length-1];};
+  const onUp=e=>{e.preventDefault();if(!drw.current)return;drw.current=false;const c=cvs.current,ctx=c.getContext("2d"),p=gp(e,c);ds(ctx,s0.current,p);setHist(h=>[...h,c.toDataURL()]);};
+  const undo=()=>{if(hist.length<=1)return;const nh=hist.slice(0,-1);setHist(nh);const c=cvs.current,ctx=c.getContext("2d"),img=new Image();img.onload=()=>{ctx.clearRect(0,0,c.width,c.height);ctx.drawImage(img,0,0);};img.src=nh[nh.length-1];};
+  const COLORS=[{v:"#ef4444",n:"Red"},{v:"#ffffff",n:"White"},{v:"#111827",n:"Black"},{v:"#eab308",n:"Yellow"}];
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-80 flex flex-col items-center justify-center p-3" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="bg-white rounded-2xl overflow-hidden shadow-2xl w-full max-w-3xl flex flex-col" style={{maxHeight:"96vh"}}>
+        <div className="bg-gray-900 text-white px-4 py-3 flex items-center justify-between">
+          <span className="font-bold text-sm">✏️ Annotate Photo</span>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl px-1">✕</button>
+        </div>
+        <div className="bg-gray-800 px-3 py-2 flex flex-wrap items-center gap-3">
+          <div className="flex gap-1.5">
+            {[{id:"arrow",lbl:"→ Arrow"},{id:"rect",lbl:"□ Box"}].map(t=>(
+              <button key={t.id} onClick={()=>setTool(t.id)} className={`px-3 h-9 rounded-lg text-sm font-bold ${tool===t.id?"bg-blue-500 text-white":"bg-gray-700 text-gray-200 hover:bg-gray-600"}`}>{t.lbl}</button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            {COLORS.map(c=><button key={c.v} title={c.n} onClick={()=>setColor(c.v)} className={`w-7 h-7 rounded-full border-2 transition-all ${color===c.v?"border-blue-400 scale-110":"border-gray-500"}`} style={{background:c.v}}/>)}
+          </div>
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-gray-400 text-xs">Size</span>
+            <input type="range" min="2" max="14" value={sz} onChange={e=>setSz(+e.target.value)} className="w-16"/>
+            <button onClick={undo} disabled={hist.length<=1} className="bg-gray-700 hover:bg-gray-600 disabled:opacity-30 text-white text-xs px-3 py-1.5 rounded-lg">↩ Undo</button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto bg-gray-100 flex items-center justify-center p-4 min-h-0">
+          <canvas ref={cvs} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp} className="max-w-full rounded shadow-lg cursor-crosshair touch-none"/>
+        </div>
+        <div className="bg-white px-4 py-3 flex justify-end gap-3 border-t border-gray-100">
+          <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-medium hover:bg-gray-50">Discard</button>
+          <button onClick={()=>onSave(cvs.current.toDataURL("image/jpeg",0.88))} className="px-5 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Save Annotation</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocManager({locs,onChange,onClose}){
+  const [list,setList]=useState([...locs]),[inp,setInp]=useState("");
+  const add=()=>{const v=inp.trim();if(v&&!list.includes(v)){setList([...list,v]);setInp("");}};
+  const mv=(i,d)=>{const a=[...list];[a[i],a[i+d]]=[a[i+d],a[i]];setList(a);};
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div><h3 className="font-bold text-gray-900">Floor / Location Tags</h3><p className="text-xs text-gray-400 mt-0.5">Customize for this project</p></div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl px-1">✕</button>
+        </div>
+        <div className="p-4 space-y-1.5 overflow-y-auto" style={{maxHeight:"16rem"}}>
+          {list.map((l,i)=>(
+            <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
+              <span className="flex-1 text-sm text-gray-800">{l}</span>
+              <button onClick={()=>mv(i,-1)} disabled={i===0} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 w-7 h-7 flex items-center justify-center">↑</button>
+              <button onClick={()=>mv(i,1)} disabled={i===list.length-1} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 w-7 h-7 flex items-center justify-center">↓</button>
+              <button onClick={()=>setList(list.filter((_,j)=>j!==i))} className="text-red-400 hover:text-red-600 w-7 h-7 flex items-center justify-center text-xs">✕</button>
+            </div>
+          ))}
+        </div>
+        <div className="px-4 pb-3 flex gap-2">
+          <input className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="e.g. Level 4 – Mechanical"/>
+          <button onClick={add} className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold">Add</button>
+        </div>
+        <div className="px-4 py-3 border-t border-gray-100 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl border border-gray-200 text-sm hover:bg-gray-50">Cancel</button>
+          <button onClick={()=>{onChange(list);onClose();}} className="px-5 py-2 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AutoFillModal({index,onSelect,onSkip}){
+  const sorted=[...index].sort((a,b)=>b.updated-a.updated);
+  const [sel,setSel]=useState(sorted[0]?.id||"");
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="px-5 py-5 border-b border-gray-100">
+          <h3 className="font-bold text-gray-900 text-base">Auto-fill from an existing project?</h3>
+          <p className="text-sm text-gray-500 mt-1">Copies project info, team contacts, logo, and location settings. Report number increments automatically.</p>
+        </div>
+        <div className="p-5">
+          <select className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={sel} onChange={e=>setSel(e.target.value)}>
+            {sorted.map(r=><option key={r.id} value={r.id}>{r.project||"Untitled"} — Report #{r.reportNo} ({r.address||"No address"})</option>)}
+          </select>
+        </div>
+        <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
+          <button onClick={onSkip} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium hover:bg-gray-50">Start Fresh</button>
+          <button onClick={()=>onSelect(sel)} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Auto-fill ✓</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AutoFillLoadingModal(){
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl px-8 py-8 flex flex-col items-center gap-3">
+        <div style={{fontSize:"2rem"}} className="animate-pulse">📋</div>
+        <p className="text-sm font-medium text-gray-700">Loading project data…</p>
+      </div>
+    </div>
+  );
+}
+
+function FirebaseSetupModal({onClose}){
+  const [url,setUrl]=useState(FB.dbUrl());
+  const [page,setPage]=useState("form");
+  const save=()=>{FB.setUrl(url.trim());onClose(true);};
+  const STEPS=[
+    ["1. Create a Firebase Project",[
+      <span>Go to <a href="https://console.firebase.google.com" target="_blank" className="text-blue-600 underline">console.firebase.google.com</a></span>,
+      "Click Add project → give it a name (e.g. Rhode Partners SOR)",
+      "Disable Google Analytics (not needed) → Create project"
+    ]],
+    ["2. Create a Realtime Database",[
+      "In the left sidebar: Build → Realtime Database",
+      "Click Create Database",
+      "Choose United States as the location → Next",
+      'Select "Start in test mode" → Enable',
+      "Your database is now created"
+    ]],
+    ["3. Set Security Rules to Public",[
+      'Click the Rules tab at the top of the Realtime Database page',
+      "Replace the contents with:",
+      <pre className="bg-gray-100 rounded p-2 text-xs mt-1 font-mono whitespace-pre">{`{\n  "rules": {\n    ".read": true,\n    ".write": true\n  }\n}`}</pre>,
+      "Click Publish"
+    ]],
+    ["4. Copy Your Database URL",[
+      'At the top of the Realtime Database page you\'ll see a URL like:',
+      <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-xs">https://your-project-default-rtdb.firebaseio.com</span>,
+      "Copy that URL and paste it below"
+    ]]
+  ];
+  if(page==="instructions") return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col" style={{maxHeight:"90vh"}}>
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
+          <h3 className="font-bold text-gray-900">Firebase Setup Guide</h3>
+          <button onClick={()=>setPage("form")} className="text-blue-600 text-sm font-medium">← Back</button>
+        </div>
+        <div className="p-5 space-y-5 overflow-y-auto text-sm text-gray-700 flex-1">
+          {STEPS.map(([title,steps])=>(
+            <div key={title}>
+              <p className="font-bold text-gray-900 mb-2">{title}</p>
+              <ol className="space-y-2 list-decimal list-inside text-gray-600">
+                {steps.map((s,i)=><li key={i} style={{paddingLeft:"0.25rem"}}>{s}</li>)}
+              </ol>
+            </div>
+          ))}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
+            <p className="text-xs text-yellow-800 font-semibold mb-1">⚠ Note on test mode</p>
+            <p className="text-xs text-yellow-700">Test mode rules expire after 30 days by default. After setup, go back to the Rules tab and remove the expiry date from the rules to keep them permanent.</p>
+          </div>
+        </div>
+        <div className="px-5 py-3 border-t border-gray-100 flex-shrink-0">
+          <button onClick={()=>setPage("form")} className="w-full bg-gray-800 text-white py-2.5 rounded-xl text-sm font-semibold">← Back to Setup</button>
+        </div>
+      </div>
+    </div>
+  );
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-gray-900">Connect Shared Library</h3>
+            <p className="text-xs text-gray-400 mt-0.5">All team members will share the same reports — no sign-in required</p>
+          </div>
+          <button onClick={()=>onClose(false)} className="text-gray-400 hover:text-gray-700 text-xl">✕</button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Firebase Database URL</label>
+            <input className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 font-mono"
+              value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://your-project-default-rtdb.firebaseio.com"/>
+          </div>
+          <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
+            <p className="text-xs text-blue-700 font-medium mb-1">Don't have a database yet?</p>
+            <p className="text-xs text-blue-600 mb-2">You'll need to create a free Firebase project. Takes about 5 minutes and only needs to be done once.</p>
+            <button onClick={()=>setPage("instructions")} className="text-xs text-blue-700 font-semibold underline">View step-by-step setup instructions →</button>
+          </div>
+        </div>
+        <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
+          <button onClick={()=>onClose(false)} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm hover:bg-gray-50">Cancel</button>
+          <button onClick={save} disabled={!url.trim()} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900 disabled:opacity-40">Save & Connect</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TypeBadge({type}){
+  const f=isFlagged(type);
+  return <span style={{fontSize:"0.68rem",fontWeight:700,padding:"0.15rem 0.55rem",background:"#f3f4f6",color:f?"#dc2626":"#374151",border:"1px solid #d1d5db"}}>{f?"⚠ ":""}{type}</span>;
+}
+
+function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,onDelete,onMoveUp,onMoveDown,onAnnotate,locHeader}){
+  const [f,setF]=useState({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"});
+  const fileRef=useRef();
+  useEffect(()=>{setF({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"});},[issue.loc,issue.desc,issue.type]);
+  const commit=u=>{const nf={...f,...u};setF(nf);onUpdate(issue.id,nf,undefined);};
+  const photos=issue.photos||[];
+  const addPhotos=files=>Array.from(files).filter(f=>f.type.startsWith("image/")).forEach(file=>{
+    const r=new FileReader();r.onload=ev=>compressImage(ev.target.result,c=>onUpdate(issue.id,undefined,[...photos,blankPhoto(c)]));r.readAsDataURL(file);});
+  const remPhoto=pid=>onUpdate(issue.id,undefined,photos.filter(p=>p.id!==pid));
+  const flagged=isFlagged(f.type);
+  return (
+    <div className="print-card" style={{border:"1px solid #d1d5db",overflow:"hidden",background:"#fff",marginBottom:"0.4rem"}}>
+      {locHeader&&<div style={{fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0.85rem",borderBottom:"2px solid #d1d5db",marginBottom:0,background:"#fff"}}>{locHeader}</div>}
+      <div style={{background:"#f3f4f6",borderBottom:"1px solid #d1d5db",padding:"0.4rem 0.85rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
+        <span style={{fontSize:"0.78rem",fontWeight:700,color:flagged?"#dc2626":"#374151",flexShrink:0,minWidth:"2.5rem"}}>{displayNum}</span>
+        {useLocations&&<select value={f.loc} onChange={e=>commit({loc:e.target.value})} className="no-print" style={{flex:1,maxWidth:"22rem",border:"1px solid #d1d5db",borderRadius:"0.2rem",padding:"0.2rem 0.45rem",fontSize:"0.78rem",background:"white",color:"#374151"}}>
+          <option value="">— Select Location —</option>
+          {locs.map(l=><option key={l}>{l}</option>)}
+        </select>}
+        <div className="no-print" style={{display:"flex",marginLeft:"auto",flexShrink:0}}>
+          <button onClick={()=>onMoveUp(issue.id)} disabled={flatIdx===0} style={{width:"1.7rem",height:"1.7rem",border:"none",background:"transparent",cursor:"pointer",color:"#9ca3af",fontSize:"0.8rem",opacity:flatIdx===0?0.25:1}}>↑</button>
+          <button onClick={()=>onMoveDown(issue.id)} disabled={flatIdx===total-1} style={{width:"1.7rem",height:"1.7rem",border:"none",background:"transparent",cursor:"pointer",color:"#9ca3af",fontSize:"0.8rem",opacity:flatIdx===total-1?0.25:1}}>↓</button>
+          <button onClick={()=>onDelete(issue.id)} style={{width:"1.7rem",height:"1.7rem",border:"none",background:"transparent",cursor:"pointer",color:"#f87171",fontSize:"0.8rem",marginLeft:"0.2rem"}}>✕</button>
+        </div>
+      </div>
+      <div style={{padding:"0.65rem 0.85rem"}}>
+        <div className="no-print" style={{display:"flex",alignItems:"center",gap:"1rem",marginBottom:"0.55rem",flexWrap:"wrap"}}>
+          <span style={{fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:"#9ca3af",flexShrink:0}}>Type</span>
+          {ISSUE_TYPES.map(t=>(
+            <label key={t} style={{display:"flex",alignItems:"center",gap:"0.3rem",cursor:"pointer"}}>
+              <input type="radio" name={`type-${issue.id}`} value={t} checked={f.type===t} onChange={()=>commit({type:t})} style={{accentColor:isFlagged(t)?"#dc2626":"#374151",width:"0.82rem",height:"0.82rem"}}/>
+              <span style={{fontSize:"0.8rem",color:isFlagged(t)?"#dc2626":"#374151",fontWeight:f.type===t?600:400}}>{t}</span>
+            </label>
+          ))}
+        </div>
+        <div className="print-show" style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.3rem"}}>
+          <TypeBadge type={f.type}/>
+        </div>
+        <AutoTA value={f.desc} onChange={e=>commit({desc:e.target.value})} className="no-print"
+          placeholder="Describe the condition, defect, or observation…"
+          style={{width:"100%",border:"1px solid #d1d5db",padding:"0.4rem 0.6rem",fontSize:"0.82rem",color:"#374151",lineHeight:1.6,background:"#fafafa",boxSizing:"border-box",minHeight:"3rem"}}/>
+        <div className="print-show" style={{fontSize:"0.8rem",color:"#1f2937",lineHeight:1.65,whiteSpace:"pre-wrap"}}>{f.desc||<span style={{color:"#9ca3af",fontStyle:"italic"}}>No description.</span>}</div>
+        {photos.length>0&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginTop:"0.65rem"}}>
+            {photos.map((ph,pi)=>(
+              <div key={ph.id} className="print-section" style={{border:"1px solid #d1d5db",overflow:"hidden",background:"#fff"}}>
+                <div style={{position:"relative",background:"#fff"}}>
+                  <img src={ph.src} alt="" style={{width:"100%",display:"block",objectFit:"contain",maxHeight:"280px"}}/>
+                  <div className="photo-label" style={{position:"absolute",top:5,left:5,background:"rgba(0,0,0,0.55)",color:"white",fontSize:"0.68rem",fontWeight:700,padding:"0.1rem 0.35rem"}}>{String.fromCharCode(65+pi)}</div>
+                  <div className="no-print" style={{position:"absolute",inset:0,display:"flex",alignItems:"flex-end",justifyContent:"flex-end",padding:"0.35rem",gap:"0.2rem",opacity:0,transition:"opacity 0.15s",background:"linear-gradient(to top,rgba(0,0,0,0.45) 0%,transparent 55%)"}}
+                    onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>
+                    <button onClick={()=>onAnnotate(ph,issue.id)} style={{background:"rgba(0,0,0,0.7)",color:"white",border:"none",padding:"0.25rem 0.55rem",fontSize:"0.7rem",cursor:"pointer"}}>✏️</button>
+                    <button onClick={()=>remPhoto(ph.id)} style={{background:"rgba(0,0,0,0.7)",color:"white",border:"none",padding:"0.25rem 0.55rem",fontSize:"0.7rem",cursor:"pointer"}}>✕</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="no-print" style={{marginTop:"0.5rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
+          <button onClick={()=>fileRef.current.click()} style={{fontSize:"0.73rem",color:"#374151",border:"1px solid #d1d5db",background:"white",padding:"0.28rem 0.7rem",cursor:"pointer"}}>+ Add Photos</button>
+          <span style={{fontSize:"0.7rem",color:"#9ca3af"}}>select multiple at once · paste ⌘V · drag & drop</span>
+          <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PartyField({label,nameKey,addrKey,R,setR}){
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">{label}</span></div>
+      <div className="p-2 space-y-1.5">
+        <input className="w-full border border-gray-200 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={R[nameKey]} onChange={e=>setR({[nameKey]:e.target.value})} placeholder="Name / Company"/>
+        <textarea className="w-full border border-gray-200 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 resize-none" rows={2} value={R[addrKey]} onChange={e=>setR({[addrKey]:e.target.value})} placeholder={"Street\nCity, State ZIP"}/>
+      </div>
+    </div>
+  );
+}
+
+function ReportsList({index,onOpen,onCreate,onDelete,syncStatus,onSyncClick,onRefresh}){
+  const sorted=[...index].sort((a,b)=>b.updated-a.updated);
+  const groups={};
+  sorted.forEach(r=>{const k=r.project||"Untitled Project";if(!groups[k])groups[k]=[];groups[k].push(r);});
+  const names=Object.keys(groups);
+  const [collapsed,setCollapsed]=useState({});
+  const toggle=n=>setCollapsed(p=>({...p,[n]:!p[n]}));
+  const syncBtn=()=>{
+    if(syncStatus==="synced")   return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 border border-green-200 text-xs font-medium text-green-700 cursor-pointer hover:bg-green-100" onClick={onRefresh}><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>Synced · Refresh</div>;
+    if(syncStatus==="syncing")  return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block"/>Syncing…</div>;
+    if(syncStatus==="error")    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-xs font-medium text-red-600 hover:bg-red-100"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>Sync Error · Retry</button>;
+    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:border-gray-400 transition-all">☁ Connect Shared Library</button>;
+  };
+  return (
+    <div style={{maxWidth:"44rem",margin:"0 auto",padding:"2.5rem 1rem"}}>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Site Observation Reports</h1>
+          <p className="text-gray-400 text-sm mt-1">{names.length} project{names.length!==1?"s":""} · {index.length} report{index.length!==1?"s":""}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {syncBtn()}
+          <button onClick={onCreate} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow transition-colors">+ New Report</button>
+        </div>
+      </div>
+      {index.length===0?(
+        <div className="text-center" style={{paddingTop:"5rem",paddingBottom:"5rem"}}>
+          <div style={{fontSize:"3.5rem",marginBottom:"1rem"}}>📋</div>
+          <p className="text-xl font-semibold text-gray-700">No reports yet</p>
+          <p className="text-gray-400 mt-2 mb-6 text-sm">Create your first site observation report</p>
+          <button onClick={onCreate} className="bg-gray-800 hover:bg-gray-900 text-white px-6 py-3 rounded-xl font-semibold text-sm">Create Report</button>
+        </div>
+      ):names.map(name=>(
+        <div key={name} className="mb-3">
+          <button onClick={()=>toggle(name)} className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-200 hover:border-gray-400 transition-all text-left"
+            style={{borderRadius:collapsed[name]?"0.75rem":"0.75rem 0.75rem 0 0"}}>
+            <div className="flex items-center gap-3">
+              <span className="text-gray-400 text-xs font-bold" style={{width:"1rem"}}>{collapsed[name]?"▶":"▼"}</span>
+              <div>
+                <div className="font-bold text-gray-900 text-sm">{name}</div>
+                <div className="text-xs text-gray-400">{groups[name].length} report{groups[name].length!==1?"s":""}
+                  {groups[name].reduce((s,r)=>s+(r.flagged||0),0)>0&&<span className="ml-2 text-red-500">· {groups[name].reduce((s,r)=>s+(r.flagged||0),0)} flagged</span>}
+                </div>
+              </div>
+            </div>
+          </button>
+          {!collapsed[name]&&groups[name].map((r,i)=>(
+            <div key={r.id} onClick={()=>onOpen(r.id)}
+              className="bg-white border-x border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center gap-4 px-5 py-3.5 transition-all"
+              style={{borderRadius:i===groups[name].length-1?"0 0 0.75rem 0.75rem":0}}>
+              <div className="bg-gray-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0" style={{width:"2.25rem",height:"2.25rem"}}>📋</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-gray-900 text-sm">Report #{r.reportNo}</span>
+                  {r.address&&<><span className="text-gray-300 text-xs">·</span><span className="text-gray-500 text-sm truncate">{r.address}</span></>}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">{r.issues} observation{r.issues!==1?"s":""}
+                  {r.flagged>0&&<span className="text-red-500 ml-1">· {r.flagged} flagged</span>} · {r.updated?fmtShort(r.updated):""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className="text-gray-300">→</span>
+                <button onClick={e=>{e.stopPropagation();if(window.confirm("Delete this report? This cannot be undone."))onDelete(r.id);}} className="text-gray-300 hover:text-red-500 hover:bg-red-50 text-xs px-2 py-1.5 rounded-lg">✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── App ───────────────────────────────────────────────────────────── */
+function App(){
+  const [view,setView]=useState("loading");
+  const [idx,setIdx]=useState([]);
+  const [report,setReport]=useState(null);
+  const [annotCtx,setAnnotCtx]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [dropping,setDropping]=useState(false);
+  const [saveStatus,setSaveStatus]=useState("saved");
+  const [autoFillIdx,setAutoFillIdx]=useState(null);
+  const [autoFillLoading,setAutoFillLoading]=useState(false);
+  const [showLocs,setShowLocs]=useState(false);
+  const [syncStatus,setSyncStatus]=useState("idle");
+  const [showFBSetup,setShowFBSetup]=useState(false);
+  const saveTimer=useRef(),dragCnt=useRef(0);
+
+  const toast$=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
+
+  useEffect(()=>{
+    let el=document.getElementById('sor-page-style');
+    if(!el){el=document.createElement('style');el.id='sor-page-style';document.head.appendChild(el);}
+    if(report){
+      const left=`${report.project||'Untitled'}: Field Report #${report.reportNo}`.replace(/"/g,"'");
+      el.textContent=`@page{margin:1in 1in 1.35in 1in;size:letter portrait;}@page{@bottom-left{content:"${left}";font-size:7.5pt;color:#9ca3af;font-family:Arial,sans-serif;}@bottom-right{content:"Page " counter(page) " of " counter(pages);font-size:7.5pt;color:#9ca3af;font-family:Arial,sans-serif;}}`;
+    }else{
+      el.textContent=`@page{margin:1in;size:letter portrait;}`;
+    }
+  },[report]);
+
+  const idxEntry=r=>({id:r.id,project:r.project,address:r.address,reportNo:r.reportNo,issues:(r.issues||[]).length,flagged:(r.issues||[]).filter(i=>isFlagged(i.type)).length,updated:r.updated});
+
+  useEffect(()=>{
+    const init=async()=>{
+      if(!FB.isConf()){
+        setIdx(JSON.parse(LS.get("sor-index")?.value||"[]"));
+        setView("list");return;
+      }
+      setSyncStatus("syncing");
+      try{
+        const remote=await Promise.race([
+          FB.loadAll(),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),5000))
+        ]);
+        const map={};
+        remote.forEach(r=>{map[r.id]=r;LS.set(`sor-${r.id}`,JSON.stringify(r));});
+        const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
+        for(const e of localIdx){
+          if(!map[e.id]){
+            const raw=LS.get(`sor-${e.id}`);
+            if(raw){const r=JSON.parse(raw.value);map[r.id]=r;await FB.save(r);}
+          }
+        }
+        const newIdx=Object.values(map).map(idxEntry);
+        LS.set("sor-index",JSON.stringify(newIdx));
+        setIdx(newIdx);setSyncStatus("synced");
+      }catch(e){
+        const local=JSON.parse(LS.get("sor-index")?.value||"[]");
+        setIdx(local);setSyncStatus("error");
+        toast$(e.message==="timeout"?"Server unreachable — showing local data":"Sync failed — showing local data");
+      }
+      setView("list");
+    };
+    init();
+  },[]);
+
+  useEffect(()=>{
+    const handleOnline=()=>{
+      if(FB.isConf()){toast$("Connection restored — syncing…");syncFromFirebase();}
+    };
+    window.addEventListener("online",handleOnline);
+    return()=>window.removeEventListener("online",handleOnline);
+  },[]);
+
+  const syncFromFirebase=async()=>{
+    setSyncStatus("syncing");
+    try{
+      const remote=await FB.loadAll();
+      const map={};
+      const localIdx=JSON.parse(LS.get("sor-index")?.value||"[]");
+      localIdx.forEach(e=>{const raw=LS.get(`sor-${e.id}`);if(raw)map[e.id]=JSON.parse(raw.value);});
+      remote.forEach(r=>{if(!map[r.id]||r.updated>map[r.id].updated)map[r.id]=r;});
+      for(const r of Object.values(map)){
+        LS.set(`sor-${r.id}`,JSON.stringify(r));
+        const inRemote=remote.find(x=>x.id===r.id);
+        if(!inRemote||r.updated>inRemote.updated) await FB.save(r);
+      }
+      const newIdx=Object.values(map).map(idxEntry);
+      LS.set("sor-index",JSON.stringify(newIdx));
+      setIdx(newIdx);setSyncStatus("synced");
+    }catch(e){console.error("Firebase sync:",e);setSyncStatus("error");toast$("Sync failed — working offline");}
+  };
+
+  useEffect(()=>{
+    if(!report) return;
+    setSaveStatus("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current=setTimeout(async()=>{
+      try{
+        const up={...report,updated:Date.now()};
+        LS.set(`sor-${report.id}`,JSON.stringify(up));
+        setIdx(prev=>{
+          const entry=idxEntry(up);
+          const i=prev.findIndex(r=>r.id===up.id);
+          const next=i>=0?prev.map((r,j)=>j===i?entry:r):[...prev,entry];
+          LS.set("sor-index",JSON.stringify(next));return next;
+        });
+        setSaveStatus("saved");
+        if(FB.isConf()){setSyncStatus("syncing");try{await FB.save(up);setSyncStatus("synced");}catch{setSyncStatus("error");}}
+      }catch{setSaveStatus("error");}
+    },800);
+  },[report]);
+
+  const openReport=async id=>{
+    const r=LS.get(`sor-${id}`);
+    if(r){setReport(JSON.parse(r.value));setView("report");return;}
+    if(FB.isConf()){
+      toast$("Loading from cloud…");
+      try{
+        const remote=await FB.req("GET",`/reports/${id}`);
+        if(remote&&!remote.archived){
+          LS.set(`sor-${id}`,JSON.stringify(remote));
+          setReport(remote);setView("report");
+        } else toast$("Report not found");
+      }catch{toast$("Could not load report — check connection");}
+    } else toast$("Report not found");
+  };
+
+  const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
+
+  // ── FIXED: fetch from Firebase when localStorage misses ──
+  const doAutoFill=async selId=>{
+    setAutoFillIdx(null);
+    setAutoFillLoading(true);
+    let s=null;
+    const cached=LS.get(`sor-${selId}`);
+    if(cached){
+      s=JSON.parse(cached.value);
+    } else if(FB.isConf()){
+      try{
+        s=await FB.req("GET",`/reports/${selId}`);
+        if(s) LS.set(`sor-${selId}`,JSON.stringify(s));
+      }catch(e){console.error("Auto-fill fetch error:",e);}
+    }
+    setAutoFillLoading(false);
+    if(s){
+      setReport(blankReport({
+        project:s.project, projectNo:s.projectNo, address:s.address,
+        owner:s.owner, ownerAddr:s.ownerAddr||"",
+        contractor:s.contractor, contractorAddr:s.contractorAddr||"",
+        logo:s.logo, locs:s.locs, reportNo:s.reportNo, useLocations:s.useLocations
+      }));
+    } else {
+      toast$("Could not load project data — starting fresh");
+      setReport(blankReport());
+    }
+    setView("report");
+  };
+
+  const deleteReport=async id=>{
+    LS.del(`sor-${id}`);
+    setIdx(prev=>{const n=prev.filter(r=>r.id!==id);LS.set("sor-index",JSON.stringify(n));return n;});
+    if(FB.isConf()) try{await FB.del(id);}catch{}
+  };
+
+  const setR=u=>setReport(p=>typeof u==="function"?u(p):{...p,...u});
+  const updateIssue=(id,fields,photos)=>setR(p=>({...p,issues:p.issues.map(i=>i.id!==id?i:{...i,...(fields||{}),...(photos!==undefined?{photos}:{})})}));
+  const deleteIssue=id=>setR(p=>({...p,issues:p.issues.filter(i=>i.id!==id)}));
+  const moveIssue=(id,d)=>setR(p=>{const a=[...p.issues],i=a.findIndex(x=>x.id===id),j=i+d;if(j<0||j>=a.length)return p;[a[i],a[j]]=[a[j],a[i]];return{...p,issues:a};});
+  const addIssue=()=>setR(p=>({...p,issues:[...p.issues,blankIssue()]}));
+
+  useEffect(()=>{
+    const fn=e=>{
+      if(view!=="report") return;
+      for(let it of(e.clipboardData?.items||[])){
+        if(it.type.startsWith("image/")){
+          const r=new FileReader();r.onload=ev=>compressImage(ev.target.result,c=>{
+            setReport(p=>{
+              if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(c)]}]};}
+              const last=p.issues[p.issues.length-1];
+              return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...(i.photos||[]),blankPhoto(c)]}:i)};
+            });toast$("Photo pasted ✓");
+          });r.readAsDataURL(it.getAsFile());
+        }
+      }
+    };
+    window.addEventListener("paste",fn);return()=>window.removeEventListener("paste",fn);
+  },[view]);
+
+  const handleDrop=files=>{
+    Array.from(files).filter(f=>f.type.startsWith("image/")).forEach(file=>{
+      const r=new FileReader();r.onload=ev=>compressImage(ev.target.result,c=>{
+        setReport(p=>{
+          if(p.issues.length===0){const iss=blankIssue();return{...p,issues:[{...iss,photos:[blankPhoto(c)]}]};}
+          const last=p.issues[p.issues.length-1];
+          return{...p,issues:p.issues.map(i=>i.id===last.id?{...i,photos:[...(i.photos||[]),blankPhoto(c)]}:i)};
+        });
+      });r.readAsDataURL(file);
+    });toast$("Photo(s) added ✓");
+  };
+
+  if(view==="loading") return <div className="min-h-screen flex items-center justify-center"><div style={{fontSize:"2.5rem"}} className="animate-pulse">📋</div></div>;
+  if(autoFillLoading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><AutoFillLoadingModal/></div>;
+  if(autoFillIdx) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><AutoFillModal index={autoFillIdx} onSelect={doAutoFill} onSkip={()=>{setAutoFillIdx(null);setReport(blankReport());setView("report");}}/></div>;
+
+  if(view==="list") return (
+    <div className="min-h-screen bg-slate-50">
+      {showFBSetup&&<FirebaseSetupModal onClose={proceed=>{setShowFBSetup(false);if(proceed)syncFromFirebase();}}/>}
+      <div className="bg-white border-b border-gray-200">
+        <div style={{maxWidth:"44rem",margin:"0 auto",padding:"0 1rem"}}>
+          <div className="flex items-center gap-3 py-3">
+            <div className="bg-gray-800 text-white rounded-xl flex items-center justify-center font-bold text-lg flex-shrink-0" style={{width:"2.25rem",height:"2.25rem"}}>📋</div>
+            <div className="font-bold text-gray-900 text-sm">Site Observation Report Builder</div>
+          </div>
+        </div>
+      </div>
+      {toast&&<div className="fixed top-4 left-1/2 z-50 bg-gray-900 text-white text-sm font-medium px-5 py-2.5 rounded-full shadow-lg pointer-events-none" style={{transform:"translateX(-50%)"}}>{toast}</div>}
+      <ReportsList index={idx} onOpen={openReport} onCreate={createReport} onDelete={deleteReport}
+        syncStatus={syncStatus}
+        onSyncClick={()=>FB.isConf()?syncFromFirebase():setShowFBSetup(true)}
+        onRefresh={syncFromFirebase}/>
+    </div>
+  );
+
+  if(view==="report"&&report){
+    const R=report;
+    const flagCount=(R.issues||[]).filter(i=>isFlagged(i.type)).length;
+
+    let displayNums,groups=[];
+    const issues=R.issues||[];
+    if(R.useLocations){
+      const locOrder=[],locMap={};
+      issues.forEach(iss=>{if(iss.loc&&!locMap.hasOwnProperty(iss.loc)){locMap[iss.loc]=locOrder.length+1;locOrder.push(iss.loc);}});
+      const lsc={};
+      displayNums=issues.map(iss=>{
+        if(!iss.loc) return "—";
+        const maj=locMap[iss.loc];
+        lsc[iss.loc]=(lsc[iss.loc]||0)+1;
+        return `${R.reportNo}.${maj}.${lsc[iss.loc]}`;
+      });
+      const gbL={};
+      issues.forEach((iss,fi)=>{
+        const k=iss.loc||"";
+        if(!gbL[k]){gbL[k]={loc:iss.loc||"",locNum:iss.loc?locMap[iss.loc]:null,items:[]};groups.push(gbL[k]);}
+        gbL[k].items.push({iss,flatIdx:fi,displayNum:displayNums[fi]});
+      });
+    } else {
+      displayNums=issues.map((_,i)=>`${R.reportNo}.${i+1}`);
+      groups=[{loc:"",locNum:null,items:issues.map((iss,fi)=>({iss,flatIdx:fi,displayNum:displayNums[fi]}))}];
+    }
+
+    const LBL={fontSize:"0.6rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:"#9ca3af",display:"block",marginBottom:"0.1rem"};
+    const VAL={fontSize:"0.82rem",color:"#1f2937"};
+    const VAL_SM={fontSize:"0.75rem",color:"#6b7280",lineHeight:1.5};
+    const LOC_HDR={fontSize:"0.78rem",fontWeight:700,color:"#1f2937",padding:"0.55rem 0",borderBottom:"1px solid #d1d5db",marginBottom:"0.4rem",marginTop:"1.5rem"};
+
+    return (
+      <div className="min-h-screen bg-slate-50"
+        onDragOver={e=>e.preventDefault()}
+        onDragEnter={e=>{e.preventDefault();dragCnt.current++;setDropping(true);}}
+        onDragLeave={e=>{e.preventDefault();if(--dragCnt.current===0)setDropping(false);}}
+        onDrop={e=>{e.preventDefault();dragCnt.current=0;setDropping(false);handleDrop(e.dataTransfer.files);}}>
+
+        {dropping&&<div className="fixed inset-0 z-50 bg-blue-500 bg-opacity-20 border-4 border-dashed border-blue-400 flex items-center justify-center pointer-events-none">
+          <div className="bg-white rounded-3xl shadow-2xl text-center" style={{padding:"2rem 3rem"}}><div style={{fontSize:"3rem",marginBottom:"0.5rem"}}>🖼️</div><p className="text-xl font-bold">Drop to add photo</p></div>
+        </div>}
+        {toast&&<div className="fixed top-4 left-1/2 z-50 bg-gray-900 text-white text-sm font-medium px-5 py-2.5 rounded-full shadow-lg pointer-events-none" style={{transform:"translateX(-50%)"}}>{toast}</div>}
+        {annotCtx&&<AnnotationModal photo={annotCtx.photo} onClose={()=>setAnnotCtx(null)}
+          onSave={src=>{const iss=issues.find(i=>i.id===annotCtx.issueId);if(iss)updateIssue(annotCtx.issueId,undefined,(iss.photos||[]).map(p=>p.id===annotCtx.photo.id?{...p,src}:p));setAnnotCtx(null);toast$("Annotation saved ✓");}}/>}
+        {showLocs&&<LocManager locs={R.locs} onChange={locs=>setR({locs})} onClose={()=>setShowLocs(false)}/>}
+
+        {/* Nav */}
+        <div className="bg-white border-b border-gray-200 sticky top-0 z-20 no-print">
+          <div style={{maxWidth:"64rem",margin:"0 auto",padding:"0 1rem"}}>
+            <div className="flex items-center gap-3 py-3">
+              <button onClick={()=>setView("list")} className="text-gray-500 hover:text-gray-900 text-sm font-medium flex-shrink-0">← Reports</button>
+              <div className="w-px bg-gray-200" style={{height:"1.25rem"}}/>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-gray-900 text-sm truncate">{R.project||"Untitled"} — SOR #{R.reportNo}</div>
+                <div className="text-xs flex items-center gap-1.5 flex-wrap">
+                  {saveStatus==="saving"&&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse"/><span className="text-yellow-500">Saving…</span></>}
+                  {saveStatus==="saved" &&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"/><span className="text-gray-400">Saved</span></>}
+                  {saveStatus==="error" &&<><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400"/><span className="text-red-400">Save error</span></>}
+                  {syncStatus==="syncing"&&<><span className="text-gray-200">·</span><span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"/><span className="text-blue-500">Syncing…</span></>}
+                  {syncStatus==="synced" &&<><span className="text-gray-200">·</span><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400"/><span className="text-green-600">Synced</span></>}
+                  {syncStatus==="error"  &&<><span className="text-gray-200">·</span><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400"/><span className="text-red-500">Sync error</span></>}
+                  <span className="text-gray-300">·</span>
+                  <span className="text-gray-400">{issues.length} observation{issues.length!==1?"s":""}</span>
+                  {flagCount>0&&<span style={{background:"#fee2e2",color:"#dc2626",fontSize:"0.65rem",fontWeight:700,padding:"0.1rem 0.5rem",borderRadius:"999px"}}>{flagCount} flagged</span>}
+                </div>
+              </div>
+              {R.useLocations&&<button onClick={()=>setShowLocs(true)} className="text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-3 py-2 rounded-xl text-xs font-medium border border-gray-200 flex-shrink-0">🏢 Locations</button>}
+              <button onClick={()=>window.print()} disabled={issues.length===0} className="bg-gray-800 hover:bg-gray-900 disabled:opacity-40 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow flex-shrink-0">⬇ Export PDF</button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{maxWidth:"64rem",margin:"0 auto",padding:"1.5rem 1rem"}}>
+          {/* ── Report Header ── */}
+          <div className="bg-white shadow-sm" style={{border:"1px solid #d1d5db",marginBottom:"1.25rem"}}>
+            {/* PRINT */}
+            <div className="print-show">
+              <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"1.2rem 1.5rem 0.9rem",borderBottom:"1.5px solid #111827"}}>
+                <div style={{flexShrink:0}}>
+                  {R.logo && R.logo !== LOGO_SVG
+                    ? <img src={R.logo} alt="Logo" style={{maxHeight:"3rem",maxWidth:"10rem",objectFit:"contain"}}/>
+                    : <div style={{fontFamily:"Arial,Helvetica,sans-serif",fontSize:"1.6rem",fontWeight:300,letterSpacing:"0.09em",lineHeight:1}}>
+                        <span style={{color:"#2b2b2b"}}>RHODE</span>
+                        <span style={{color:"#1b3c6e"}}> : PARTNERS</span>
+                      </div>
+                  }
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <p style={{fontSize:"0.55rem",fontWeight:700,letterSpacing:"0.18em",textTransform:"uppercase",color:"#9ca3af",margin:"0 0 0.1rem"}}>Site Observation Report</p>
+                  <p style={{fontSize:"1.1rem",fontWeight:700,color:"#111827",margin:"0 0 0.05rem",lineHeight:1.2}}>{R.project||"—"}</p>
+                  {R.projectNo&&<p style={{fontSize:"0.75rem",color:"#6b7280",margin:"0 0 0.05rem"}}>Project No. {R.projectNo}</p>}
+                  <p style={{fontSize:"0.75rem",color:"#9ca3af",margin:0}}>{R.address||"—"}</p>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.4rem 1.5rem",padding:"0.7rem 1.5rem 0.6rem",borderBottom:"1px solid #e5e7eb"}}>
+                {[["Owner",R.owner,R.ownerAddr],["Architect",R.architect,R.architectAddr],["General Contractor",R.contractor,R.contractorAddr]].map(([lbl,name,addr])=>(
+                  <div key={lbl}><span style={LBL}>{lbl}</span><span style={VAL}>{name||"—"}</span>{addr&&<div style={{...VAL_SM,whiteSpace:"pre-line",marginTop:"0.1rem"}}>{addr}</div>}</div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"0.4rem 1.5rem",padding:"0.6rem 1.5rem",borderBottom:"1px solid #e5e7eb"}}>
+                <div><span style={LBL}>Report No.</span><span style={VAL}>#{R.reportNo}</span></div>
+                <div><span style={LBL}>Date of Issuance</span><span style={VAL}>{fmtd(R.issued)}</span></div>
+                <div><span style={LBL}>Date of Site Visit</span><span style={VAL}>{fmtd(R.visited)}</span></div>
+                <div><span style={LBL}>Distribution</span><span style={VAL}>{DIST_LIST}</span></div>
+              </div>
+              <div style={{padding:"0.4rem 1.5rem 0.7rem"}}><p style={{fontSize:"0.6rem",color:"#9ca3af",lineHeight:1.65,fontStyle:"italic",margin:0}}>{DISCLAIMER}</p></div>
+            </div>
+            {/* SCREEN */}
+            <div className="no-print p-5 space-y-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Report Header</p>
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0">
+                  <img src={LOGO_SVG} alt="Rhode Partners" style={{height:"3rem",maxWidth:"10rem",objectFit:"contain"}}/>
+                </div>
+                <div className="flex-1 space-y-2">
+                  <input className="w-full text-xl font-bold text-gray-900 border-b-2 border-gray-100 focus:border-gray-400 focus:outline-none pb-1 bg-transparent" value={R.project} onChange={e=>setR({project:e.target.value})} placeholder="Project Name"/>
+                  <div className="flex gap-3">
+                    <input className="flex-1 text-sm text-gray-600 border-b border-gray-100 focus:border-gray-300 focus:outline-none pb-1 bg-transparent" value={R.projectNo} onChange={e=>setR({projectNo:e.target.value})} placeholder="Project No."/>
+                    <input className="flex-1 text-sm text-gray-600 border-b border-gray-100 focus:border-gray-300 focus:outline-none pb-1 bg-transparent" value={R.address} onChange={e=>setR({address:e.target.value})} placeholder="Project Address"/>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <PartyField label="Owner" nameKey="owner" addrKey="ownerAddr" R={R} setR={setR}/>
+                <PartyField label="General Contractor" nameKey="contractor" addrKey="contractorAddr" R={R} setR={setR}/>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="block"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Field Report No.</span>
+                  <input type="number" min="1" max="999" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={R.reportNo} onChange={e=>setR({reportNo:parseInt(e.target.value)||1})}/></label>
+                <label className="block"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Date of Issuance</span>
+                  <input type="date" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={R.issued} onChange={e=>setR({issued:e.target.value})}/></label>
+                <label className="block"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Date of Site Visit</span>
+                  <input type="date" className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={R.visited} onChange={e=>setR({visited:e.target.value})}/></label>
+              </div>
+              <div className="border-t border-gray-100 pt-3 flex items-center gap-3">
+                <div onClick={()=>setR({useLocations:!R.useLocations})} className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer flex-shrink-0 ${R.useLocations?"bg-gray-800":"bg-gray-300"}`}>
+                  <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${R.useLocations?"translate-x-4":"translate-x-0.5"}`}/>
+                </div>
+                <span className="text-sm font-medium text-gray-700 cursor-pointer" onClick={()=>setR({useLocations:!R.useLocations})}>Organize by location</span>
+                <span className="text-xs text-gray-400">{R.useLocations?"Grouped & numbered by floor/area":"Numbered sequentially"}</span>
+              </div>
+              <div className="border-t border-gray-100 pt-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Disclaimer</p>
+                <p className="text-xs text-gray-400 leading-relaxed italic">{DISCLAIMER}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Observations ── */}
+          <div style={{marginBottom:"1.25rem"}}>
+            <div className="no-print flex items-center justify-between" style={{marginBottom:"0.75rem"}}>
+              <h2 className="font-bold text-gray-800 text-base">Site Observations <span className="text-gray-400 font-normal text-sm">({issues.length})</span></h2>
+              <button onClick={addIssue} className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm">+ Add Observation</button>
+            </div>
+            {issues.length===0&&(
+              <div className="text-center no-print" style={{paddingTop:"4rem",paddingBottom:"4rem"}}>
+                <div style={{fontSize:"3rem",marginBottom:"0.75rem"}}>🏗️</div>
+                <p className="font-semibold text-gray-400">No observations yet</p>
+                <p className="text-sm text-gray-300" style={{marginTop:"0.25rem",marginBottom:"1.25rem"}}>Document your first site condition, defect, or item requiring follow-up</p>
+                <button onClick={addIssue} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Add First Observation</button>
+              </div>
+            )}
+            {groups.map(group=>(
+              <div key={group.loc||"__none__"}>
+                {R.useLocations&&group.loc&&<div style={LOC_HDR}>{R.reportNo}.{group.locNum} {group.loc}</div>}
+                {R.useLocations&&!group.loc&&group.items.length>0&&<div style={{...LOC_HDR,color:"#9ca3af",fontStyle:"italic"}}>No Location Assigned</div>}
+                {group.items.map(({iss,flatIdx,displayNum})=>(
+                  <IssueCard key={iss.id} issue={iss} displayNum={displayNum} flatIdx={flatIdx} total={issues.length}
+                    locs={R.locs} useLocations={R.useLocations}
+                    onUpdate={updateIssue} onDelete={deleteIssue}
+                    onMoveUp={id=>moveIssue(id,-1)} onMoveDown={id=>moveIssue(id,1)}
+                    onAnnotate={(ph,issueId)=>setAnnotCtx({photo:ph,issueId})}/>
+                ))}
+              </div>
+            ))}
+            {issues.length>0&&<button onClick={addIssue} className="no-print w-full border-2 border-dashed border-gray-200 hover:border-gray-400 text-gray-400 hover:text-gray-600 text-sm font-medium transition-colors" style={{padding:"0.85rem",marginTop:"0.6rem",borderRadius:"0.75rem"}}>+ Add Another Observation</button>}
+          </div>
+          <div style={{height:"2rem"}}/>
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
