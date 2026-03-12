@@ -605,6 +605,7 @@ function App(){
   // idxBaseEntry is the index entry object passed directly from AutoFillModal —
   // guarantees project/address/reportNo even if the full report can't be loaded.
   const doAutoFill=async idxBaseEntry=>{
+    console.log("doAutoFill called with:", JSON.stringify(idxBaseEntry));
     setAutoFillIdx(null);
     const selId=idxBaseEntry?.id;
     // Try localStorage
@@ -622,6 +623,7 @@ function App(){
       }catch(e){console.error("Auto-fill fetch:",e);}
       setAutoFillLoading(false);
     }
+    console.log("full report fetched:", full ? JSON.stringify({project:full.project,address:full.address,owner:full.owner}) : "null");
     // Merge: index entry wins for project/address/reportNo (always up-to-date);
     // full report fills in owner, contractor, locs, etc.
     const ix=idxBaseEntry||{};
