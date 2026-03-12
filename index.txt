@@ -188,8 +188,14 @@ function LocManager({locs,onChange,onClose}){
 }
 
 function AutoFillModal({index,onSelect,onSkip}){
-  const sorted=[...index].sort((a,b)=>b.updated-a.updated);
-  const [sel,setSel]=useState(sorted[0]?.id||"");
+  const sorted=[...index].filter(r=>r&&r.id).sort((a,b)=>(b.updated||0)-(a.updated||0));
+  const [selId,setSelId]=useState(sorted[0]?.id||"");
+  if(sorted.length===0){onSkip();return null;}
+  const handleSelect=()=>{
+    const entry=sorted.find(r=>r.id===selId)||sorted[0];
+    if(entry) onSelect(entry);
+    else onSkip();
+  };
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
@@ -198,13 +204,13 @@ function AutoFillModal({index,onSelect,onSkip}){
           <p className="text-sm text-gray-500 mt-1">Copies project info, team contacts, logo, and location settings. Report number increments automatically.</p>
         </div>
         <div className="p-5">
-          <select className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={sel} onChange={e=>setSel(e.target.value)}>
+          <select className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={selId} onChange={e=>setSelId(e.target.value)}>
             {sorted.map(r=><option key={r.id} value={r.id}>{r.project||"Untitled"} — Report #{r.reportNo} ({r.address||"No address"})</option>)}
           </select>
         </div>
         <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
           <button onClick={onSkip} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium hover:bg-gray-50">Start Fresh</button>
-          <button onClick={()=>onSelect(sel)} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Auto-fill ✓</button>
+          <button onClick={handleSelect} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Auto-fill ✓</button>
         </div>
       </div>
     </div>
@@ -596,32 +602,43 @@ function App(){
 
   const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
 
-  // ── FIXED: fetch from Firebase when localStorage misses ──
-  const doAutoFill=async selId=>{
+  // idxBaseEntry is the index entry object passed directly from AutoFillModal —
+  // guarantees project/address/reportNo even if the full report can't be loaded.
+  const doAutoFill=async idxBaseEntry=>{
     setAutoFillIdx(null);
-    setAutoFillLoading(true);
-    let s=null;
-    const cached=LS.get(`sor-${selId}`);
-    if(cached){
-      s=JSON.parse(cached.value);
-    } else if(FB.isConf()){
+    const selId=idxBaseEntry?.id;
+    // Try localStorage
+    let full=null;
+    if(selId){
+      const cached=LS.get(`sor-${selId}`);
+      if(cached){try{full=JSON.parse(cached.value);}catch{}}
+    }
+    // Try Firebase if not cached
+    if(!full&&selId&&FB.isConf()){
+      setAutoFillLoading(true);
       try{
-        s=await FB.req("GET",`/reports/${selId}`);
-        if(s) LS.set(`sor-${selId}`,JSON.stringify(s));
-      }catch(e){console.error("Auto-fill fetch error:",e);}
+        const fetched=await FB.req("GET",`/reports/${selId}`);
+        if(fetched&&fetched.id){full=fetched;LS.set(`sor-${selId}`,JSON.stringify(full));}
+      }catch(e){console.error("Auto-fill fetch:",e);}
+      setAutoFillLoading(false);
     }
-    setAutoFillLoading(false);
-    if(s){
-      setReport(blankReport({
-        project:s.project, projectNo:s.projectNo, address:s.address,
-        owner:s.owner, ownerAddr:s.ownerAddr||"",
-        contractor:s.contractor, contractorAddr:s.contractorAddr||"",
-        logo:s.logo, locs:s.locs, reportNo:s.reportNo, useLocations:s.useLocations
-      }));
-    } else {
-      toast$("Could not load project data — starting fresh");
-      setReport(blankReport());
-    }
+    // Merge: index entry wins for project/address/reportNo (always up-to-date);
+    // full report fills in owner, contractor, locs, etc.
+    const ix=idxBaseEntry||{};
+    const s=full||{};
+    setReport(blankReport({
+      project:       ix.project||s.project||"",
+      projectNo:     s.projectNo||"",
+      address:       ix.address||s.address||"",
+      reportNo:      ix.reportNo!=null?ix.reportNo:(s.reportNo||1),
+      owner:         s.owner||"",
+      ownerAddr:     s.ownerAddr||"",
+      contractor:    s.contractor||"",
+      contractorAddr:s.contractorAddr||"",
+      logo:          s.logo,
+      locs:          s.locs,
+      useLocations:  s.useLocations
+    }));
     setView("report");
   };
 
