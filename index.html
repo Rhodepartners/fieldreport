@@ -37,7 +37,6 @@ const LS = {
 };
 
 const FB = (() => {
-  // ⚠️ PASTE YOUR FIREBASE URL HERE BEFORE UPLOADING TO GITHUB:
   const HARDCODED_URL = "https://rhode-field-reports-default-rtdb.firebaseio.com";
   const dbUrl  = () => HARDCODED_URL || localStorage.getItem("sor-fburl") || "";
   const isConf = () => !!dbUrl();
@@ -61,14 +60,6 @@ const DISCLAIMER  = "This report is considered to be a factual representation of
 const ISSUE_TYPES = ["General Observation","Defect Noted","Issue Noted"];
 const DEFAULT_LOCS= ["Basement / B1","Level 1","Level 2","Level 3","Roof","Exterior","Site"];
 const LOGO_SVG = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 112"><text font-family="Arial,Helvetica,sans-serif" font-size="78" font-weight="300" letter-spacing="7" y="84"><tspan fill="#2b2b2b">RHODE</tspan><tspan fill="#1b3c6e"> : PARTNERS</tspan></text></svg>');
-const LogoSVG = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 112" style={{height:"3rem",maxWidth:"10rem",display:"block"}}>
-    <text fontFamily="Arial,Helvetica,sans-serif" fontSize="78" fontWeight="300" letterSpacing="7" y="84">
-      <tspan fill="#2b2b2b">RHODE</tspan>
-      <tspan fill="#1b3c6e"> : PARTNERS</tspan>
-    </text>
-  </svg>
-);
 const FIRM_NAME   = "Rhode Partners, Inc.";
 const FIRM_ADDR   = "515 Congress Ave #1600\nAustin, Texas 78701";
 const DIST_LIST   = "Owner · Architect · General Contractor";
@@ -197,8 +188,14 @@ function LocManager({locs,onChange,onClose}){
 }
 
 function AutoFillModal({index,onSelect,onSkip}){
-  const sorted=[...index].sort((a,b)=>b.updated-a.updated);
-  const [sel,setSel]=useState(sorted[0]?.id||"");
+  const sorted=[...index].filter(r=>r&&r.id).sort((a,b)=>(b.updated||0)-(a.updated||0));
+  const [selId,setSelId]=useState(sorted[0]?.id||"");
+  if(sorted.length===0){onSkip();return null;}
+  const handleSelect=()=>{
+    const entry=sorted.find(r=>r.id===selId)||sorted[0];
+    if(entry) onSelect(entry);
+    else onSkip();
+  };
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
@@ -207,14 +204,25 @@ function AutoFillModal({index,onSelect,onSkip}){
           <p className="text-sm text-gray-500 mt-1">Copies project info, team contacts, logo, and location settings. Report number increments automatically.</p>
         </div>
         <div className="p-5">
-          <select className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={sel} onChange={e=>setSel(e.target.value)}>
+          <select className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" value={selId} onChange={e=>setSelId(e.target.value)}>
             {sorted.map(r=><option key={r.id} value={r.id}>{r.project||"Untitled"} — Report #{r.reportNo} ({r.address||"No address"})</option>)}
           </select>
         </div>
         <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
           <button onClick={onSkip} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium hover:bg-gray-50">Start Fresh</button>
-          <button onClick={()=>onSelect(sel)} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Auto-fill ✓</button>
+          <button onClick={handleSelect} className="flex-1 px-4 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900">Auto-fill ✓</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AutoFillLoadingModal(){
+  return (
+    <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl px-8 py-8 flex flex-col items-center gap-3">
+        <div style={{fontSize:"2rem"}} className="animate-pulse">📋</div>
+        <p className="text-sm font-medium text-gray-700">Loading project data…</p>
       </div>
     </div>
   );
@@ -312,7 +320,6 @@ function TypeBadge({type}){
   return <span style={{fontSize:"0.68rem",fontWeight:700,padding:"0.15rem 0.55rem",background:"#f3f4f6",color:f?"#dc2626":"#374151",border:"1px solid #d1d5db"}}>{f?"⚠ ":""}{type}</span>;
 }
 
-/* ── IssueCard ─────────────────────────────────────────────────────── */
 function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,onDelete,onMoveUp,onMoveDown,onAnnotate,locHeader}){
   const [f,setF]=useState({loc:issue.loc,desc:issue.desc,type:issue.type||"General Observation"});
   const fileRef=useRef();
@@ -339,7 +346,6 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
         </div>
       </div>
       <div style={{padding:"0.65rem 0.85rem"}}>
-        {/* Type selector — screen only */}
         <div className="no-print" style={{display:"flex",alignItems:"center",gap:"1rem",marginBottom:"0.55rem",flexWrap:"wrap"}}>
           <span style={{fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:"#9ca3af",flexShrink:0}}>Type</span>
           {ISSUE_TYPES.map(t=>(
@@ -349,7 +355,6 @@ function IssueCard({issue,displayNum,flatIdx,total,locs,useLocations,onUpdate,on
             </label>
           ))}
         </div>
-        {/* Type badge — print only (no location; already shown in section header) */}
         <div className="print-show" style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.3rem"}}>
           <TypeBadge type={f.type}/>
         </div>
@@ -406,7 +411,7 @@ function ReportsList({index,onOpen,onCreate,onDelete,syncStatus,onSyncClick,onRe
   const syncBtn=()=>{
     if(syncStatus==="synced")   return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 border border-green-200 text-xs font-medium text-green-700 cursor-pointer hover:bg-green-100" onClick={onRefresh}><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>Synced · Refresh</div>;
     if(syncStatus==="syncing")  return <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block"/>Syncing…</div>;
-    if(syncStatus==="error")    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text.xs font-medium text-red-600 hover:bg-red-100"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>Sync Error · Retry</button>;
+    if(syncStatus==="error")    return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-xs font-medium text-red-600 hover:bg-red-100"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>Sync Error · Retry</button>;
     return <button onClick={onSyncClick} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:border-gray-400 transition-all">☁ Connect Shared Library</button>;
   };
   return (
@@ -478,6 +483,7 @@ function App(){
   const [dropping,setDropping]=useState(false);
   const [saveStatus,setSaveStatus]=useState("saved");
   const [autoFillIdx,setAutoFillIdx]=useState(null);
+  const [autoFillLoading,setAutoFillLoading]=useState(false);
   const [showLocs,setShowLocs]=useState(false);
   const [syncStatus,setSyncStatus]=useState("idle");
   const [showFBSetup,setShowFBSetup]=useState(false);
@@ -593,14 +599,51 @@ function App(){
       }catch{toast$("Could not load report — check connection");}
     } else toast$("Report not found");
   };
+
   const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
-  const doAutoFill=selId=>{
+
+  // idxBaseEntry is the index entry object passed directly from AutoFillModal —
+  // guarantees project/address/reportNo even if the full report can't be loaded.
+  const doAutoFill=async idxBaseEntry=>{
+    console.log("doAutoFill called with:", JSON.stringify(idxBaseEntry));
     setAutoFillIdx(null);
-    const r=LS.get(`sor-${selId}`);
-    if(r){const s=JSON.parse(r.value);setReport(blankReport({project:s.project,projectNo:s.projectNo,address:s.address,owner:s.owner,ownerAddr:s.ownerAddr||"",contractor:s.contractor,contractorAddr:s.contractorAddr||"",logo:s.logo,locs:s.locs,reportNo:s.reportNo,useLocations:s.useLocations}));}
-    else setReport(blankReport());
+    const selId=idxBaseEntry?.id;
+    // Try localStorage
+    let full=null;
+    if(selId){
+      const cached=LS.get(`sor-${selId}`);
+      if(cached){try{full=JSON.parse(cached.value);}catch{}}
+    }
+    // Try Firebase if not cached
+    if(!full&&selId&&FB.isConf()){
+      setAutoFillLoading(true);
+      try{
+        const fetched=await FB.req("GET",`/reports/${selId}`);
+        if(fetched&&fetched.id){full=fetched;LS.set(`sor-${selId}`,JSON.stringify(full));}
+      }catch(e){console.error("Auto-fill fetch:",e);}
+      setAutoFillLoading(false);
+    }
+    console.log("full report fetched:", full ? JSON.stringify({project:full.project,address:full.address,owner:full.owner}) : "null");
+    // Merge: index entry wins for project/address/reportNo (always up-to-date);
+    // full report fills in owner, contractor, locs, etc.
+    const ix=idxBaseEntry||{};
+    const s=full||{};
+    setReport(blankReport({
+      project:       ix.project||s.project||"",
+      projectNo:     s.projectNo||"",
+      address:       ix.address||s.address||"",
+      reportNo:      ix.reportNo!=null?ix.reportNo:(s.reportNo||1),
+      owner:         s.owner||"",
+      ownerAddr:     s.ownerAddr||"",
+      contractor:    s.contractor||"",
+      contractorAddr:s.contractorAddr||"",
+      logo:          s.logo,
+      locs:          s.locs,
+      useLocations:  s.useLocations
+    }));
     setView("report");
   };
+
   const deleteReport=async id=>{
     LS.del(`sor-${id}`);
     setIdx(prev=>{const n=prev.filter(r=>r.id!==id);LS.set("sor-index",JSON.stringify(n));return n;});
@@ -644,6 +687,7 @@ function App(){
   };
 
   if(view==="loading") return <div className="min-h-screen flex items-center justify-center"><div style={{fontSize:"2.5rem"}} className="animate-pulse">📋</div></div>;
+  if(autoFillLoading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><AutoFillLoadingModal/></div>;
   if(autoFillIdx) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><AutoFillModal index={autoFillIdx} onSelect={doAutoFill} onSkip={()=>{setAutoFillIdx(null);setReport(blankReport());setView("report");}}/></div>;
 
   if(view==="list") return (
