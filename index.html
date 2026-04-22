@@ -485,6 +485,8 @@ function App(){
   const [autoFillIdx,setAutoFillIdx]=useState(null);
   const [autoFillLoading,setAutoFillLoading]=useState(false);
   const [showLocs,setShowLocs]=useState(false);
+  const [conflictData,setConflictData]=useState(null); // {remote, local}
+  const loadedAtRef=useRef(null);
   const [syncStatus,setSyncStatus]=useState("idle");
   const [showFBSetup,setShowFBSetup]=useState(false);
   const saveTimer=useRef(),dragCnt=useRef(0);
@@ -580,24 +582,58 @@ function App(){
           LS.set("sor-index",JSON.stringify(next));return next;
         });
         setSaveStatus("saved");
-        if(FB.isConf()){setSyncStatus("syncing");try{await FB.save(up);setSyncStatus("synced");}catch{setSyncStatus("error");}}
+        if(FB.isConf()){
+          setSyncStatus("syncing");
+          try{
+            // Conflict check: if cloud version is newer than when we loaded, warn instead of overwrite
+            const cloudMeta=await FB.req("GET",`/reports/${report.id}/updated`);
+            if(cloudMeta&&cloudMeta>up.updated&&cloudMeta>(loadedAtRef.current||0)){
+              // Cloud is newer — fetch full remote and surface conflict
+              const remote=await FB.req("GET",`/reports/${report.id}`);
+              if(remote&&!remote.archived){setConflictData({remote,local:up});setSyncStatus("error");return;}
+            }
+            await FB.save(up);setSyncStatus("synced");
+          }catch{setSyncStatus("error");}
+        }
       }catch{setSaveStatus("error");}
     },800);
   },[report]);
 
   const openReport=async id=>{
-    const r=LS.get(`sor-${id}`);
-    if(r){setReport(JSON.parse(r.value));setView("report");return;}
     if(FB.isConf()){
-      toast$("Loading from cloud…");
+      // Always load from Firebase when connected — never trust local cache as primary source
+      const local=LS.get(`sor-${id}`);
+      if(local){const p=JSON.parse(local.value);setReport(p);loadedAtRef.current=p.updated||Date.now();setView("report");}
       try{
         const remote=await FB.req("GET",`/reports/${id}`);
         if(remote&&!remote.archived){
           LS.set(`sor-${id}`,JSON.stringify(remote));
-          setReport(remote);setView("report");
-        } else toast$("Report not found");
-      }catch{toast$("Could not load report — check connection");}
-    } else toast$("Report not found");
+          setReport(remote);loadedAtRef.current=remote.updated||Date.now();
+          if(!local) setView("report");
+        } else if(!local) toast$("Report not found");
+      }catch(e){
+        if(!local){toast$("Could not load report — check connection");}
+        else{toast$("Showing cached version — cloud unreachable");}
+      }
+    } else {
+      const r=LS.get(`sor-${id}`);
+      if(r){const p=JSON.parse(r.value);setReport(p);loadedAtRef.current=p.updated||Date.now();setView("report");}
+      else toast$("Report not found");
+    }
+  };
+
+  const reloadFromCloud=async()=>{
+    if(!report||!FB.isConf()) return;
+    try{
+      toast$("Reloading from cloud…");
+      const remote=await FB.req("GET",`/reports/${report.id}`);
+      if(remote&&!remote.archived){
+        LS.set(`sor-${report.id}`,JSON.stringify(remote));
+        setReport(remote);loadedAtRef.current=remote.updated||Date.now();
+        setConflictData(null);
+        toast$("Reloaded from cloud ✓");
+      }
+    }catch{toast$("Could not reach cloud — try again");}
   };
 
   const createReport=()=>{if(idx.length>0)setAutoFillIdx(idx);else{setReport(blankReport());setView("report");}};
@@ -776,13 +812,27 @@ function App(){
                 </div>
               </div>
               {R.useLocations&&<button onClick={()=>setShowLocs(true)} className="text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-3 py-2 rounded-xl text-xs font-medium border border-gray-200 flex-shrink-0">🏢 Locations</button>}
+              {FB.isConf()&&<button onClick={reloadFromCloud} title="Reload latest version from cloud" className="text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-3 py-2 rounded-xl text-xs font-medium border border-gray-200 flex-shrink-0">☁ Reload</button>}
               <button onClick={()=>window.print()} disabled={issues.length===0} className="bg-gray-800 hover:bg-gray-900 disabled:opacity-40 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow flex-shrink-0">⬇ Export PDF</button>
             </div>
           </div>
         </div>
 
         <div style={{maxWidth:"64rem",margin:"0 auto",padding:"1.5rem 1rem"}}>
-          {/* ── Report Header ── */}
+        {conflictData&&(
+          <div className="no-print bg-amber-50 border border-amber-300 px-4 py-3 flex items-center gap-3 flex-wrap" style={{marginBottom:"0.75rem",borderRadius:"0.75rem"}}>
+            <span style={{fontSize:"1.1rem"}}>⚠️</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-800">This report was updated in another tab or device</p>
+              <p className="text-xs text-amber-700 mt-0.5">Cloud version has {conflictData.remote.issues?.length||0} observations · Your version has {conflictData.local.issues?.length||0} observations · Last cloud save: {fmtShort(conflictData.remote.updated)}</p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button onClick={()=>setConflictData(null)} className="px-3 py-1.5 rounded-lg border border-amber-300 text-xs font-medium text-amber-800 hover:bg-amber-100">Keep Mine</button>
+              <button onClick={reloadFromCloud} className="px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs font-semibold hover:bg-amber-800">Load Cloud Version</button>
+            </div>
+          </div>
+        )}
+        {/* ── Report Header ── */}
           <div className="bg-white shadow-sm" style={{border:"1px solid #d1d5db",marginBottom:"1.25rem"}}>
             {/* PRINT */}
             <div className="print-show">
